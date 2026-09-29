@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Bí mật & dữ liệu cục bộ — KHÔNG BAO GIỜ commit
+*.key
+*.pem
+*.csr
+*.srl
+certs/
+.env
+*.db
+*.db-wal
+*.db-shm
+data/
+
+# Build
+build/
+dist/
+*.spec.bak
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
