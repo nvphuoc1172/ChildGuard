@@ -200,29 +200,110 @@ Tất cả endpoint có rate-limit theo `device_id` hoặc `parent_id` (vd `slow
 
 ## 7. Cấu trúc thư mục dự án
 
+> Cập nhật sau mỗi tính năng lớn. ✅ = đã có code thật (đã giao cho bạn) · ⬜ = mới có trong thiết kế, chưa viết.
+> Lần cập nhật gần nhất: sau tính năng **Ghép đôi (Enrollment)**.
+
 ```
 ChildGuard/
-├── agent/                  # Mã nguồn OGK-Agent (Service + Tray UI)
-│   ├── service/            # Windows Service, Policy Enforcer, DNS Proxy
-│   ├── tray/                # Tray UI (giao diện trẻ)
-│   ├── requirements.txt
-│   └── INSTALL_AGENT.md     # Hướng dẫn cài dịch vụ trên máy Windows sạch
-├── server/                 # Mã nguồn FastAPI
-│   ├── app/                 # routers, models, schemas
-│   ├── migrations/
-│   ├── seed/                 # dữ liệu mẫu + tài khoản demo
-│   └── requirements.txt
-├── dashboard/               # Giao diện phụ huynh + màn hình minh bạch cho trẻ
-├── tests/                   # >=15 unit test, >=5 kịch bản tích hợp
-├── docs/
-│   ├── BaoCao.docx
-│   ├── BaoCaoKyThuatMang.pdf
-│   ├── PRIVACY.md            # + bản dành cho trẻ đọc
-│   ├── THREATMODEL.md        # STRIDE + ASVS checklist
-│   ├── AI_USAGE.md
-│   └── ChildGuard-Design.md  # (file này)
+├── agent/
+│   ├── enroll.py                 ✅ Script ghép đôi: tính device fingerprint (Machine GUID
+│   │                                  + hostname, đã băm SHA256), gọi POST /enroll qua HTTPS
+│   │                                  bằng CA nội bộ, lưu device_id + token vào agent_state/.
+│   ├── agent_state/               ✅ (tự sinh khi chạy enroll.py) device_token.json — CHỨA BÍ
+│   │                                  MẬT, đã có trong .gitignore, không commit.
+│   ├── certs/                     ✅ ogk-ca.crt copy từ server — agent dùng để xác minh TLS.
+│   ├── service/                  ⬜ Windows Service (LocalSystem): Policy Enforcer, Screen-time
+│   │                                  Counter, App Controller, DNS Proxy 127.0.0.1:53,
+│   │                                  Sync Worker (heartbeat + hàng đợi sự kiện).
+│   ├── tray/                     ⬜ Tray UI: đồng hồ còn lại, màn hình minh bạch, nút "Xin
+│   │                                  thêm giờ" — giao tiếp Service qua named pipe.
+│   ├── requirements.txt          ⬜ (hiện cài tay qua pip install trong venv — xem C4 trong
+│   │                                  SETUP_ENVIRONMENT.md; sẽ đóng băng thành file khi agent
+│   │                                  đủ ổn định)
+│   └── INSTALL_AGENT.md          ⬜ Hướng dẫn cài dịch vụ trên máy Windows sạch
+│
+├── server/
+│   ├── app/
+│   │   ├── __init__.py            ✅ (rỗng — đánh dấu package)
+│   │   ├── main.py                ✅ Khởi tạo FastAPI app, lifespan tạo bảng DB, mount router,
+│   │   │                              endpoint GET /ping (smoke test).
+│   │   ├── database.py            ✅ Engine SQLAlchemy, bật WAL mode + foreign_keys, dependency
+│   │   │                              get_db() cho từng request.
+│   │   ├── models.py              ✅ 7 bảng: Parent, Child, Device, EnrollmentCode, Token,
+│   │   │                              Policy, AuditLog.
+│   │   ├── schemas.py             ✅ Pydantic: EnrollRequest, EnrollResponse, ErrorResponse.
+│   │   ├── security.py            ✅ Sinh mã ghép đôi (loại ký tự dễ nhầm), sinh/băm token,
+│   │   │                              tính hạn dùng access/refresh token, policy mặc định.
+│   │   └── routers/
+│   │       ├── __init__.py        ✅ (rỗng)
+│   │       └── enroll.py          ✅ POST /enroll — toàn bộ luồng ghép đôi: validate mã, tạo
+│   │                                  Device, cấp Policy v1 nếu chưa có, cấp token, ghi
+│   │                                  AuditLog "enrollment_completed".
+│   │       ├── heartbeat.py      ⬜ POST /heartbeat, GET /policy — tính năng tiếp theo
+│   │       ├── commands.py       ⬜ WS /ws/{device_id}, POST /commands, .../ack
+│   │       ├── events.py         ⬜ POST /events/batch (đồng bộ ngoại tuyến + idempotency)
+│   │       ├── reports.py        ⬜ GET /reports/{child_id}
+│   │       └── auth.py           ⬜ POST /auth/login, /auth/refresh (đăng nhập phụ huynh thật
+│   │                                  — hiện đang tạm thay bằng scripts/create_enrollment_code.py)
+│   ├── scripts/
+│   │   └── create_enrollment_code.py ✅ CLI tạo mã ghép đôi + tài khoản demo — thay tạm cho nút
+│   │                                      "Tạo mã" trên dashboard cho đến khi có auth thật.
+│   ├── migrations/                ⬜ Alembic — sẽ thêm khi schema ổn định hơn (hiện dùng
+│   │                                  Base.metadata.create_all() trong main.py cho giai đoạn dev).
+│   ├── seed/                      ⬜ Dữ liệu mẫu đầy đủ cho demo (nhiều trẻ, nhiều policy, lịch
+│   │                                  sử sự kiện) — khác với scripts/create_enrollment_code.py
+│   │                                  (chỉ tạo 1 parent/1 child tối thiểu để test).
+│   └── requirements.txt           ✅ fastapi, uvicorn, sqlalchemy, pydantic, httpx, pytest.
+│
+├── dashboard/
+│   ├── templates/
+│   │   ├── base.html              ✅ Khung layout: sidebar + điều hướng, {% block content %}.
+│   │   └── overview.html          ✅ Trang Tổng quan: quota hôm nay, lịch tuần mini, yêu cầu
+│   │                                  đang chờ (nút Duyệt/Từ chối gắn sẵn hx-post), nhật ký
+│   │                                  hoạt động. CHƯA nối FastAPI route thật (đang là template
+│   │                                  độc lập, biến {{ }} cần route truyền context vào).
+│   │   ├── policy.html           ⬜ Cấu hình quota/lịch tuần/whitelist app & domain
+│   │   ├── requests.html         ⬜ Toàn bộ danh sách yêu cầu (overview chỉ hiện rút gọn)
+│   │   ├── reports.html          ⬜ Báo cáo chi tiết theo khoảng thời gian
+│   │   └── audit.html            ⬜ Nhật ký kiểm toán
+│   ├── static/css/
+│   │   └── style.css              ✅ Design tokens (màu, font Be Vietnam Pro/IBM Plex Mono),
+│   │                                  toàn bộ style cho layout + trang Tổng quan, responsive
+│   │                                  (gập sidebar dưới 760px).
+│   └── routers/                  ⬜ Route FastAPI phục vụ Jinja2Templates (GET /dashboard/...,
+│                                      POST /api/commands/.../approve) — cần auth.py trước.
+│
+├── tests/
+│   ├── conftest.py                ✅ Fixture db_session (SQLite tạm/test), fixture client
+│   │                                  (TestClient + override get_db) — dùng chung cho mọi
+│   │                                  file test sau này.
+│   └── test_enroll.py             ✅ 20 unit test: 10 cho security.py (sinh mã/token, TTL),
+│                                      10 cho POST /enroll (thành công, 404/409/410, audit log,
+│                                      không tạo policy trùng). Vượt chỉ tiêu tối thiểu 15.
+│       ├── test_heartbeat.py     ⬜
+│       ├── test_commands.py      ⬜
+│       ├── test_events_batch.py  ⬜ (bao gồm test idempotency key)
+│       └── test_integration_*.py ⬜ >=5 kịch bản tích hợp theo yêu cầu đề bài — sẽ ghép dần
+│                                      khi từng tính năng giao thức hoàn thiện (xem mục 5).
+│
 ├── demo/
-└── README.md                 # Cài đặt được trong 15 phút trên máy sạch
+│   ├── overview_preview.html      ✅ Bản xem trước tĩnh của Dashboard — mở trực tiếp bằng
+│   │                                  trình duyệt, dữ liệu mock, không cần chạy server.
+│   └── style.css                  ✅ (bản sao của dashboard/static/css/style.css cho demo)
+│
+├── docs/
+│   ├── ChildGuard-Design.md       ✅ (file này) — thiết kế kiến trúc, cập nhật liên tục.
+│   ├── SETUP_ENVIRONMENT.md       ✅ Hướng dẫn chuẩn bị môi trường (VM NAT, TLS, port-forward,
+│   │                                  khắc phục sự cố mạng).
+│   ├── BaoCao.docx                ⬜
+│   ├── BaoCaoKyThuatMang.pdf      ⬜
+│   ├── PRIVACY.md                 ⬜ (+ bản dành cho trẻ đọc)
+│   ├── THREATMODEL.md             ⬜ STRIDE + ASVS checklist
+│   └── AI_USAGE.md                ⬜
+│
+├── .gitignore                     ✅ (nhớ đã thêm dòng agent_state/ sau tính năng Enrollment)
+└── README.md                      ⬜ Cài đặt được trong 15 phút trên máy sạch — nên viết sau
+                                        cùng, khi agent+server+dashboard đã chạy được với nhau.
 ```
 
 ---

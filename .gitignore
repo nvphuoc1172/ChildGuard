@@ -26,3 +26,5 @@ dist/
 .vscode/
 .idea/
 Thumbs.db
+
+agent_state/
