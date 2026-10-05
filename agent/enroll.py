@@ -1,113 +1,148 @@
-"""POST /enroll — xem mục 5.1 trong docs/ChildGuard-Design.md.
+"""OGK-Agent — ghép đôi thiết bị (enrollment).
 
-Bước này chính là điểm ghi nhận sự đồng ý của phụ huynh (consent),
-nên MỌI lần gọi thành công đều phải ghi AuditLog — không bỏ qua dù
-để tối ưu tốc độ.
+Chạy trên Windows 10/11:
+    cd agent
+    .\\.venv\\Scripts\\Activate.ps1
+    python enroll.py --server 10.11.0.55 --ca-cert certs\\ogk-ca.crt
+
+Script sẽ:
+  1. Tính device fingerprint từ Machine GUID + hostname (không gửi dữ
+     liệu định danh thô ra ngoài máy — xem mục 5.1 trong Design.md).
+  2. Hỏi mã ghép đôi (8 ký tự) đã lấy từ server.
+  3. Gọi POST /enroll qua HTTPS, xác minh server bằng CA nội bộ.
+  4. Lưu device_id + token vào file JSON cục bộ.
+
+Lưu ý: đây là bản dev chạy tay để test luồng ghép đôi. Khi làm tính
+năng Windows Service, bước này sẽ chuyển thành một phần của quá trình
+cài đặt (installer gọi enroll() rồi mới start service).
 """
+from __future__ import annotations
+
+import argparse
+import getpass
+import hashlib
 import json
-from datetime import datetime
+import socket
+import ssl
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-
-from app import models, schemas, security
-from app.database import get_db
-
-router = APIRouter(tags=["enroll"])
+try:
+    import winreg
+except ImportError:  # pragma: no cover - chỉ chạy thật trên Windows
+    winreg = None
 
 
-@router.post(
-    "/enroll",
-    response_model=schemas.EnrollResponse,
-    status_code=status.HTTP_201_CREATED,
-    responses={
-        404: {"model": schemas.ErrorResponse, "description": "Mã ghép đôi không tồn tại"},
-        409: {"model": schemas.ErrorResponse, "description": "Mã ghép đôi đã được dùng"},
-        410: {"model": schemas.ErrorResponse, "description": "Mã ghép đôi đã hết hạn"},
-    },
-)
-def enroll_device(payload: schemas.EnrollRequest, db: Session = Depends(get_db)):
-    code = payload.code.strip().upper()
+def get_machine_guid() -> str:
+    """Đọc Machine GUID từ registry Windows — ổn định qua các lần cài
+    lại hệ điều hành khác nhau (không đổi trừ khi cài lại Windows)."""
+    if winreg is None:
+        # Cho phép chạy thử trên Linux/macOS khi phát triển/test logic,
+        # không dùng để ghép đôi thật.
+        return "dev-fake-machine-guid"
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography"
+        ) as key:
+            return winreg.QueryValueEx(key, "MachineGuid")[0]
+    except OSError as exc:
+        raise RuntimeError(
+            "Không đọc được Machine GUID — thử chạy PowerShell với quyền "
+            "Administrator."
+        ) from exc
 
-    enrollment = db.get(models.EnrollmentCode, code)
-    if enrollment is None:
-        raise HTTPException(status_code=404, detail="invalid_code")
 
-    now = datetime.utcnow()
+def compute_fingerprint() -> str:
+    """fingerprint = SHA256(machine_guid:hostname) — tối giản dữ liệu,
+    không thu thập gì khác (đúng tinh thần Nghị định 13/2023)."""
+    guid = get_machine_guid()
+    hostname = socket.gethostname()
+    raw = f"{guid}:{hostname}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    if enrollment.used_at is not None:
-        raise HTTPException(status_code=409, detail="code_already_used")
 
-    if enrollment.expires_at < now:
-        raise HTTPException(status_code=410, detail="code_expired")
+def call_enroll(server: str, port: int, ca_cert: str, code: str, fingerprint: str) -> dict:
+    url = f"https://{server}:{port}/enroll"
+    body = json.dumps({"code": code, "device_fingerprint": fingerprint}).encode("utf-8")
 
-    # --- Tạo thiết bị mới ---
-    device = models.Device(
-        child_id=enrollment.child_id,
-        fingerprint_hash=payload.device_fingerprint,
-        enrolled_at=now,
-        last_seen_at=now,
-        status="active",
+    ctx = ssl.create_default_context(cafile=ca_cert)
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
-    db.add(device)
 
-    # --- Đánh dấu mã đã dùng (không xoá — giữ lại phục vụ audit) ---
-    enrollment.used_at = now
-
-    # --- Đảm bảo trẻ có policy mặc định (chỉ tạo nếu chưa có) ---
-    latest_policy = (
-        db.query(models.Policy)
-        .filter(models.Policy.child_id == enrollment.child_id)
-        .order_by(models.Policy.version.desc())
-        .first()
-    )
-    if latest_policy is None:
-        defaults = security.default_policy_payload()
-        latest_policy = models.Policy(
-            child_id=enrollment.child_id,
-            version=1,
-            quota_json=defaults["quota_json"],
-            schedule_json=defaults["schedule_json"],
-            app_rules_json=defaults["app_rules_json"],
-            domain_rules_json=defaults["domain_rules_json"],
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(error_body).get("detail", error_body)
+        except json.JSONDecodeError:
+            detail = error_body
+        raise SystemExit(f"Server từ chối ghép đôi ({exc.code}): {detail}")
+    except urllib.error.URLError as exc:
+        raise SystemExit(
+            f"Không kết nối được tới {url} — kiểm tra lại IP server, "
+            f"cổng, port-forward và chứng chỉ CA.\nChi tiết: {exc.reason}"
         )
-        db.add(latest_policy)
 
-    # --- Cấp cặp token ---
-    raw_access = security.generate_raw_token()
-    raw_refresh = security.generate_raw_token()
-    token_row = models.Token(
-        device_id=device.id,
-        access_token_hash=security.hash_token(raw_access),
-        refresh_token_hash=security.hash_token(raw_refresh),
-        access_expires_at=security.access_token_expiry(now),
-        refresh_expires_at=security.refresh_token_expiry(now),
-        revoked=False,
+
+def save_state(out_path: Path, state: dict) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--server", required=True, help="IP của máy chủ (vd 10.11.0.55)")
+    parser.add_argument("--port", type=int, default=8443)
+    parser.add_argument("--ca-cert", required=True, help="Đường dẫn tới ogk-ca.crt")
+    parser.add_argument("--code", help="Mã ghép đôi (nếu bỏ qua, script sẽ hỏi)")
+    parser.add_argument(
+        "--out",
+        default="agent_state/device_token.json",
+        help="Nơi lưu device_id + token (mặc định: agent_state/device_token.json)",
     )
-    db.add(token_row)
+    args = parser.parse_args()
 
-    # --- Ghi nhận sự đồng ý (bắt buộc) ---
-    audit = models.AuditLog(
-        actor_type="agent",
-        actor_id=device.id,
-        action="enrollment_completed",
-        detail_json=json.dumps(
-            {
-                "code": code,
-                "child_id": enrollment.child_id,
-                "parent_id": enrollment.parent_id,
-            }
-        ),
-        created_at=now,
+    code = args.code or input("Nhập mã ghép đôi (8 ký tự): ").strip().upper()
+    if len(code) != 8:
+        raise SystemExit("Mã ghép đôi phải có đúng 8 ký tự.")
+
+    print("Đang tính device fingerprint...")
+    fingerprint = compute_fingerprint()
+    print(f"  fingerprint = {fingerprint[:16]}... (đã băm, không gửi dữ liệu thô)")
+
+    print(f"Đang gọi POST https://{args.server}:{args.port}/enroll ...")
+    result = call_enroll(args.server, args.port, args.ca_cert, code, fingerprint)
+
+    out_path = Path(args.out)
+    save_state(
+        out_path,
+        {
+            "device_id": result["device_id"],
+            "access_token": result["access_token"],
+            "refresh_token": result["refresh_token"],
+            "policy_version": result["policy_version"],
+            "server": args.server,
+            "port": args.port,
+        },
     )
-    db.add(audit)
 
-    db.commit()
-    db.refresh(device)
+    print()
+    print("Ghép đôi thành công.")
+    print(f"  device_id      = {result['device_id']}")
+    print(f"  policy_version = {result['policy_version']}")
+    print(f"  Đã lưu token vào: {out_path.resolve()}")
+    print()
+    print("Lưu ý bảo mật: file này chứa token thật — không commit vào Git")
+    print("(đã có trong .gitignore qua pattern *.json trong agent_state/).")
 
-    return schemas.EnrollResponse(
-        device_id=device.id,
-        access_token=raw_access,
-        refresh_token=raw_refresh,
-        policy_version=latest_policy.version,
-    )
+
+if __name__ == "__main__":
+    main()
