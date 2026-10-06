@@ -5,11 +5,16 @@ Chạy thật trên VM: xem lệnh uvicorn với --ssl-keyfile/--ssl-certfile
 trong docs/SETUP_ENVIRONMENT.md, mục A11.
 """
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine
-from app.routers import enroll
+from app.routers import dashboard, enroll, heartbeat
+
+# server/app/main.py -> ... -> ChildGuard/dashboard/
+DASHBOARD_DIR = Path(__file__).resolve().parent.parent.parent / "dashboard"
 
 
 @asynccontextmanager
@@ -23,6 +28,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OGK-Server", version="0.1.0", lifespan=lifespan)
 
 app.include_router(enroll.router)
+app.include_router(heartbeat.router)
+app.include_router(dashboard.router)
+
+app.mount(
+    "/static",
+    StaticFiles(directory=str(DASHBOARD_DIR / "static")),
+    name="static",
+)
 
 
 @app.get("/ping")

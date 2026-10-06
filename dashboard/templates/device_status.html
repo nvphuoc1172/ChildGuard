@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trạng thái thiết bị · ChildGuard (dev)</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <meta http-equiv="refresh" content="30">
+</head>
+<body>
+  <main class="main" style="max-width: 900px; margin: 0 auto;">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Trạng thái thiết bị</h1>
+        <div class="page-title-sub">
+          Trang kiểm tra nội bộ — dữ liệu thật từ heartbeat, tự tải lại mỗi 30s.
+          Cập nhật lúc {{ generated_at }}.
+        </div>
+      </div>
+    </div>
+
+    {% if devices %}
+    <div class="request-list">
+      {% for d in devices %}
+      <div class="request-row">
+        <div class="request-icon">{{ "🟢" if d.is_online else "⚪" }}</div>
+        <div class="request-text">
+          <div class="request-title">{{ d.child_name }}</div>
+          <div class="request-time">
+            device_id: <code>{{ d.device_id }}</code> ·
+            policy v{{ d.policy_version }} ·
+            lần cuối: {{ d.last_seen_label }}
+            {% if d.pending_count > 0 %}
+            · <strong style="color: var(--ochre);">{{ d.pending_count }} lệnh đang chờ giao</strong>
+            {% endif %}
+          </div>
+        </div>
+        <span class="status-pill {% if not d.is_online %}is-offline{% endif %}">
+          <span class="dot"></span>
+          {{ "Trực tuyến" if d.is_online else "Mất kết nối" }}
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="card" style="text-align:center; color: var(--ink-soft);">
+      Chưa có thiết bị nào. Chạy <code>agent/enroll.py</code> để ghép đôi một thiết bị.
+    </div>
+    {% endif %}
+
+    <p style="margin-top: 20px; font-size: 13px; color: var(--ink-soft);">
+      ⚠️ Trang tạm thời, chưa có đăng nhập — chỉ dùng để tự kiểm tra trong lúc phát triển.
+      Sẽ thay bằng <code>dashboard/templates/overview.html</code> (đã có sẵn, xem demo/) khi
+      có xác thực phụ huynh thật.
+    </p>
+  </main>
+</body>
+</html>

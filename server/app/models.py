@@ -91,6 +91,19 @@ class Policy(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class Command(Base):
+    __tablename__ = "commands"
+
+    id = Column(String(32), primary_key=True, default=_new_id)
+    device_id = Column(String(32), ForeignKey("devices.id"), nullable=False, index=True)
+    command_type = Column(String(30), nullable=False)  # lock | unlock | grant_minutes
+    payload_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # delivered_at: NULL = agent chưa nhận được (đang chờ heartbeat/WS tiếp theo)
+    delivered_at = Column(DateTime, nullable=True)
+    acked_at = Column(DateTime, nullable=True)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 

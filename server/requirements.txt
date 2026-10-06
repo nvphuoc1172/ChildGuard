@@ -1,6 +1,18 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-sqlalchemy==2.0.36
-pydantic==2.13
-httpx==0.28.1
-pytest==8.3.4
+# Lưu ý Python 3.14: pydantic<2.13 build pydantic-core từ source và LỖI trên
+# Python 3.14 (PyO3 chưa hỗ trợ ABI 3.14 ở các bản cũ hơn). Từ 2.13 trở lên,
+# PyPI có sẵn wheel dựng sẵn cho 3.14 — không cần hạ cấp Python, không cần Rust
+# toolchain. Dùng version tối thiểu (>=) thay vì ghim cứng (==) để pip luôn
+# chọn được wheel mới nhất tương thích với Python đang cài.
+fastapi>=0.115
+pydantic>=2.13
+sqlalchemy>=2.0.36
+uvicorn>=0.34
+httpx>=0.28
+pytest>=8.3
+jinja2>=3.1
+
+# Nếu dùng Python 3.12/3.13 (ổn định hơn, nhiều wheel hơn), có thể đổi dòng
+# uvicorn ở trên thành uvicorn[standard]>=0.34 để có uvloop/httptools
+# (nhanh hơn, hỗ trợ --reload mượt hơn khi dev). Trên Python 3.14, uvicorn
+# thường (không [standard]) vẫn chạy đầy đủ HTTPS/WebSocket, chỉ không có
+# phần tối ưu hiệu năng đó.
