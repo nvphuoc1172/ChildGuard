@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}ChildGuard (OGK) — Bảng điều khiển phụ huynh{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body>
+  <div class="app-container">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-icon">🛡️</div>
+        <span>ChildGuard</span>
+      </div>
+
+      <ul class="nav-menu">
+        <li class="nav-item {% if active_page == 'overview' %}active{% endif %}">
+          <a href="/dashboard">
+            <span>📊</span>
+            <span>Tổng quan</span>
+          </a>
+        </li>
+        <li class="nav-item {% if active_page == 'policy' %}active{% endif %}">
+          <a href="/dashboard/policy">
+            <span>⚙️</span>
+            <span>Chính sách (Policy)</span>
+          </a>
+        </li>
+        <li class="nav-item {% if active_page == 'requests' %}active{% endif %}">
+          <a href="/dashboard/requests">
+            <span>📨</span>
+            <span>Yêu cầu từ trẻ</span>
+          </a>
+        </li>
+        <li class="nav-item {% if active_page == 'reports' %}active{% endif %}">
+          <a href="/dashboard/reports">
+            <span>📈</span>
+            <span>Báo cáo & Thống kê</span>
+          </a>
+        </li>
+        <li class="nav-item {% if active_page == 'audit' %}active{% endif %}">
+          <a href="/dashboard/audit">
+            <span>📜</span>
+            <span>Nhật ký kiểm toán</span>
+          </a>
+        </li>
+        <li class="nav-item {% if active_page == 'devices' %}active{% endif %}">
+          <a href="/dashboard/devices">
+            <span>💻</span>
+            <span>Thiết bị</span>
+          </a>
+        </li>
+      </ul>
+
+      <div class="sidebar-footer">
+        <div>
+          <strong>{{ current_user.email if current_user else "Phụ huynh" }}</strong>
+        </div>
+        <form action="/auth/logout" method="post" style="display:inline;">
+          <button type="submit" class="btn btn-sm btn-outline" style="padding: 4px 8px;">Thoát</button>
+        </form>
+      </div>
+    </aside>
+
+    <div class="content-area">
+      <main class="main-content">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Cấu hình chính sách · ChildGuard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Cấu hình chính sách kiểm soát</h1>
+    <div class="page-title-sub">Thiết lập giới hạn thời gian, lịch tuần, chặn ứng dụng và lọc tên miền website</div>
+  </div>
+</div>
+
+{% if success_msg %}
+<div style="background-color: var(--success-bg); color: var(--success); padding: 12px 16px; border-radius: var(--radius-sm); margin-bottom: 20px;">
+  ✓ {{ success_msg }}
+</div>
+{% endif %}
+
+<div class="card">
+  <form method="POST" action="/dashboard/policy/save">
+    <div class="form-group">
+      <label class="form-label">Chọn hồ sơ trẻ em</label>
+      <select name="child_id" class="form-select" onchange="window.location.href='/dashboard/policy?child_id=' + this.value">
+        {% for ch in children %}
+        <option value="{{ ch.id }}" {% if ch.id == selected_child.id %}selected{% endif %}>
+          {{ ch.display_name }} (Đang dùng Policy v{{ current_policy.version if current_policy else 1 }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">
+
+    <h3 style="margin-bottom: 16px; font-size: 16px; color: var(--text-main);">1. Giới hạn thời gian sử dụng (Screen Time Quota)</h3>
+    <div class="form-group">
+      <label class="form-label">Hạn mức mỗi ngày (phút)</label>
+      <input type="number" name="daily_minutes" class="form-input" min="15" max="1440" step="15"
+             value="{{ quota.get('daily_minutes', 120) }}">
+      <div class="form-help">Mặc định: 120 phút (2 giờ). Khi hết giờ, máy sẽ tự động khóa hoặc thoát ứng dụng.</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Khung giờ cho phép sử dụng trong ngày</label>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <input type="time" name="start_time" class="form-input" style="max-width: 160px;"
+               value="{{ schedule.get('start_time', '07:00') }}">
+        <span>đến</span>
+        <input type="time" name="end_time" class="form-input" style="max-width: 160px;"
+               value="{{ schedule.get('end_time', '21:30') }}">
+      </div>
+      <div class="form-help">Ngoài khung giờ này, máy tính trẻ sẽ bị hạn chế hoặc khóa đăng nhập.</div>
+    </div>
+
+    <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">
+
+    <h3 style="margin-bottom: 16px; font-size: 16px; color: var(--text-main);">2. Kiểm soát Ứng dụng (App Controller)</h3>
+    <div class="form-group">
+      <label class="form-label">Danh sách tên tiến trình ứng dụng bị cấm (Blacklist)</label>
+      <textarea name="blocked_apps" class="form-textarea" rows="4" placeholder="vd: roblox.exe&#10;game.exe&#10;discord.exe">{{ blocked_apps_text }}</textarea>
+      <div class="form-help">Mỗi tên file tiến trình (.exe) trên một dòng. Khi phát hiện trẻ mở ứng dụng này, Agent sẽ đóng ngay trong 2-3s và ghi nhận cảnh báo.</div>
+    </div>
+
+    <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">
+
+    <h3 style="margin-bottom: 16px; font-size: 16px; color: var(--text-main);">3. Lọc Tên miền Website (DNS Filtering 127.0.0.1:53)</h3>
+    <div class="form-group">
+      <label class="form-label">Danh sách tên miền website bị chặn (Domain Blacklist)</label>
+      <textarea name="blocked_domains" class="form-textarea" rows="4" placeholder="vd: facebook.com&#10;tiktok.com&#10;youtube.com&#10;badsite.com">{{ blocked_domains_text }}</textarea>
+      <div class="form-help">Mỗi tên miền trên một dòng. DNS Proxy nội bộ sẽ phân giải về 0.0.0.0 để chặn trẻ truy cập các trang này.</div>
+    </div>
+
+    <div style="margin-top: 28px;">
+      <button type="submit" class="btn btn-primary" style="padding: 10px 24px; font-weight: 600;">
+        💾 Lưu & Áp dụng Chính sách Mới
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

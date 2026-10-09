@@ -11,7 +11,17 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine
-from app.routers import dashboard, enroll, heartbeat
+from app.routers import (
+    auth,
+    commands,
+    dashboard,
+    enroll,
+    events,
+    heartbeat,
+    policy,
+    reports,
+    requests,
+)
 
 # server/app/main.py -> ... -> ChildGuard/dashboard/
 DASHBOARD_DIR = Path(__file__).resolve().parent.parent.parent / "dashboard"
@@ -27,9 +37,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="OGK-Server", version="0.1.0", lifespan=lifespan)
 
+app.include_router(auth.router)
 app.include_router(enroll.router)
 app.include_router(heartbeat.router)
+app.include_router(commands.router)
+app.include_router(events.router)
+app.include_router(policy.router)
+app.include_router(requests.router)
+app.include_router(reports.router)
 app.include_router(dashboard.router)
+
 
 app.mount(
     "/static",

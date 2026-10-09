@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block title %}Tổng quan · ChildGuard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Tổng quan bảo vệ trẻ em</h1>
+    <div class="page-title-sub">Giám sát hoạt động, thời gian sử dụng và điều khiển khẩn cấp theo thời gian thực</div>
+  </div>
+  <div class="btn-group">
+    <a href="/dashboard/policy" class="btn btn-outline">⚙️ Cấu hình chính sách</a>
+  </div>
+</div>
+
+{% if children_data %}
+  {% for c in children_data %}
+  <div class="card" style="margin-bottom: 24px;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+      <div>
+        <h2 style="font-size: 20px; font-weight: 700;">{{ c.name }}</h2>
+        <div style="font-size: 13px; color: var(--text-muted); margin-top: 2px;">
+          Thiết bị: <code>{{ c.device_id }}</code> · Phiên bản chính sách: v{{ c.policy_version }}
+        </div>
+      </div>
+      <div>
+        <span class="status-pill {% if not c.is_online %}is-offline{% endif %}">
+          <span class="dot"></span>
+          {{ "Trực tuyến (<5s)" if c.is_online else "Mất kết nối (" ~ c.last_seen_label ~ ")" }}
+        </span>
+      </div>
+    </div>
+
+    <!-- Screen Time Quota Progress -->
+    <div class="progress-container">
+      <div class="progress-header">
+        <span>Thời gian sử dụng hôm nay: <strong>{{ c.used_minutes }} phút</strong></span>
+        <span>Hạn mức tối đa: <strong>{{ c.daily_quota }} phút</strong></span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill {% if c.percent_used >= 100 %}over-limit{% endif %}"
+             style="width: {{ c.percent_used if c.percent_used <= 100 else 100 }}%;">
+        </div>
+      </div>
+      <div style="font-size: 12px; color: var(--text-soft); margin-top: 4px;">
+        Đã sử dụng {{ c.percent_used }}% hạn mức trong ngày.
+        {% if c.percent_used >= 100 %}
+          <span style="color: var(--danger); font-weight: 600;">⚠️ Đã hết hạn mức sử dụng! Máy sẽ bị khóa.</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Action Controls (Emergency & Time Grant) -->
+    <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+      <div style="font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--text-muted);">
+        ĐIỀU KHIỂN KHẨN CẤP & CẤP THÊM GIỜ (Độ trễ &lt; 5s):
+      </div>
+      <div class="btn-group">
+        <form action="/dashboard/action/command" method="POST" style="display: inline;">
+          <input type="hidden" name="device_id" value="{{ c.device_id }}">
+          <input type="hidden" name="command_type" value="lock">
+          <button type="submit" class="btn btn-danger">
+            🔒 Khóa máy ngay lập tức
+          </button>
+        </form>
+
+        <form action="/dashboard/action/command" method="POST" style="display: inline;">
+          <input type="hidden" name="device_id" value="{{ c.device_id }}">
+          <input type="hidden" name="command_type" value="unlock">
+          <button type="submit" class="btn btn-success">
+            🔓 Mở khóa máy
+          </button>
+        </form>
+
+        <form action="/dashboard/action/command" method="POST" style="display: inline;">
+          <input type="hidden" name="device_id" value="{{ c.device_id }}">
+          <input type="hidden" name="command_type" value="grant_minutes">
+          <input type="hidden" name="minutes" value="15">
+          <button type="submit" class="btn btn-outline">
+            ⏱️ +15 phút
+          </button>
+        </form>
+
+        <form action="/dashboard/action/command" method="POST" style="display: inline;">
+          <input type="hidden" name="device_id" value="{{ c.device_id }}">
+          <input type="hidden" name="command_type" value="grant_minutes">
+          <input type="hidden" name="minutes" value="30">
+          <button type="submit" class="btn btn-outline">
+            ⏱️ +30 phút
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="card" style="text-align: center; padding: 40px; color: var(--text-muted);">
+    <div style="font-size: 48px; margin-bottom: 12px;">💻</div>
+    <h3>Chưa có thiết bị nào được ghép đôi</h3>
+    <p style="margin-top: 8px; font-size: 14px;">Hãy tạo mã ghép đôi và nhập trên máy trẻ em (chạy <code>agent/enroll.py</code>).</p>
+  </div>
+{% endif %}
+
+<!-- Pending Requests from Children -->
+<div class="card" style="margin-top: 24px;">
+  <div class="card-title">
+    <span>📨 Yêu cầu chờ duyệt từ trẻ</span>
+    <span class="badge {% if pending_requests %}badge-warning{% endif %}">{{ pending_requests|length }} đang chờ</span>
+  </div>
+
+  {% if pending_requests %}
+    <div class="request-list">
+      {% for req in pending_requests %}
+      <div class="request-row">
+        <div class="request-info">
+          <div class="request-icon">⏳</div>
+          <div>
+            <div class="request-title">
+              Xin thêm {{ req.subject }} phút sử dụng
+            </div>
+            <div class="request-subtitle">
+              Lý do: "{{ req.reason or 'Không có lý do' }}" · Gửi lúc {{ req.created_at }}
+            </div>
+          </div>
+        </div>
+        <div class="btn-group">
+          <form action="/dashboard/action/request" method="POST" style="display: inline;">
+            <input type="hidden" name="request_id" value="{{ req.id }}">
+            <input type="hidden" name="action" value="approve">
+            <button type="submit" class="btn btn-sm btn-success">✓ Đồng ý & Cấp giờ</button>
+          </form>
+          <form action="/dashboard/action/request" method="POST" style="display: inline;">
+            <input type="hidden" name="request_id" value="{{ req.id }}">
+            <input type="hidden" name="action" value="reject">
+            <button type="submit" class="btn btn-sm btn-outline">✕ Từ chối</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div style="text-align: center; padding: 20px; color: var(--text-soft); font-size: 14px;">
+      Hiện không có yêu cầu nào từ trẻ cần xử lý.
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

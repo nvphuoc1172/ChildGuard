@@ -56,3 +56,43 @@ def default_policy_payload() -> dict:
         "app_rules_json": '{"mode": "allow_all"}',
         "domain_rules_json": '{"mode": "allow_all"}',
     }
+
+
+def hash_password(password: str, salt: str = "ogk-parent-salt") -> str:
+    return hashlib.sha256(f"{salt}:{password}".encode("utf-8")).hexdigest()
+
+
+import hmac
+import time
+
+SESSION_SECRET = "ogk-parent-secret-lab-2026-safe"
+
+
+def create_parent_session(parent_id: str, hours: int = 24) -> str:
+    expires = int(time.time()) + (hours * 3600)
+    msg = f"{parent_id}:{expires}"
+    sig = hmac.new(SESSION_SECRET.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{msg}:{sig}"
+
+
+def verify_parent_session(session_token: str) -> str | None:
+    try:
+        parts = session_token.split(":")
+        if len(parts) != 3:
+            return None
+        parent_id, expires_str, sig = parts
+        expires = int(expires_str)
+        if time.time() > expires:
+            return None
+        expected = hmac.new(
+            SESSION_SECRET.encode("utf-8"),
+            f"{parent_id}:{expires_str}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        if hmac.compare_digest(sig, expected):
+            return parent_id
+        return None
+    except Exception:
+        return None
+
+

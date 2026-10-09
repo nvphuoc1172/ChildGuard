@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}Yêu cầu từ trẻ · ChildGuard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Yêu cầu từ máy trẻ em</h1>
+    <div class="page-title-sub">Duyệt hoặc từ chối các đề xuất xin thêm giờ hoặc xin mở ứng dụng/website</div>
+  </div>
+</div>
+
+<div class="card">
+  {% if requests %}
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Thời gian</th>
+          <th>Loại yêu cầu</th>
+          <th>Nội dung</th>
+          <th>Lý do từ trẻ</th>
+          <th>Trạng thái</th>
+          <th>Thao tác</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in requests %}
+        <tr>
+          <td>{{ r.created_at }}</td>
+          <td>
+            <span class="badge badge-warning">
+              {{ "Xin thêm giờ" if r.request_type == 'grant_time' else r.request_type }}
+            </span>
+          </td>
+          <td><strong>{{ r.subject }} phút</strong></td>
+          <td>{{ r.reason or "—" }}</td>
+          <td>
+            {% if r.status == 'pending' %}
+              <span class="badge badge-warning">Đang chờ duyệt</span>
+            {% elif r.status == 'approved' %}
+              <span class="badge badge-success">Đã đồng ý</span>
+            {% else %}
+              <span class="badge badge-danger">Đã từ chối</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.status == 'pending' %}
+            <div class="btn-group">
+              <form action="/dashboard/action/request" method="POST" style="display:inline;">
+                <input type="hidden" name="request_id" value="{{ r.id }}">
+                <input type="hidden" name="action" value="approve">
+                <button type="submit" class="btn btn-sm btn-success">✓ Đồng ý</button>
+              </form>
+              <form action="/dashboard/action/request" method="POST" style="display:inline;">
+                <input type="hidden" name="request_id" value="{{ r.id }}">
+                <input type="hidden" name="action" value="reject">
+                <button type="submit" class="btn btn-sm btn-outline">✕ Từ chối</button>
+              </form>
+            </div>
+            {% else %}
+              <span style="font-size: 12px; color: var(--text-soft);">Đã xử lý lúc {{ r.resolved_at }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div style="text-align: center; padding: 40px; color: var(--text-muted);">
+    Chưa có yêu cầu nào từ trẻ.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

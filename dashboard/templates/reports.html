@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Báo cáo & Thống kê · ChildGuard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Báo cáo & Thống kê hoạt động</h1>
+    <div class="page-title-sub">Tổng hợp thời gian sử dụng, các ứng dụng và trang web bị chặn theo dữ liệu nhật ký sự kiện</div>
+  </div>
+</div>
+
+<div class="cards-grid">
+  <div class="card">
+    <div class="card-title">⏱️ Thời gian sử dụng hôm nay</div>
+    <div style="font-size: 32px; font-weight: 700; color: var(--primary);">
+      {{ stats.today_screen_time_minutes }} <span style="font-size: 16px; font-weight: normal; color: var(--text-muted);">phút</span>
+    </div>
+    <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+      Được tính tự động qua EventLog khi Agent trực tuyến hoặc đồng bộ ngoại tuyến.
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🚫 Ứng dụng bị chặn nhiều nhất</div>
+    {% if stats.top_blocked_apps %}
+    <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">
+      {% for app in stats.top_blocked_apps %}
+      <li style="display: flex; justify-content: space-between; font-size: 14px;">
+        <span><code>{{ app.name }}</code></span>
+        <span class="badge badge-danger">{{ app.count }} lần</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div style="color: var(--text-soft); font-size: 13px;">Chưa ghi nhận ứng dụng nào bị chặn.</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-title">🌐 Trang web bị chặn nhiều nhất</div>
+    {% if stats.top_blocked_webs %}
+    <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">
+      {% for web in stats.top_blocked_webs %}
+      <li style="display: flex; justify-content: space-between; font-size: 14px;">
+        <span><code>{{ web.name }}</code></span>
+        <span class="badge badge-warning">{{ web.count }} lần</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div style="color: var(--text-soft); font-size: 13px;">Chưa ghi nhận trang web nào bị chặn.</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-top: 24px;">
+  <div class="card-title">📜 Nhật ký sự kiện chi tiết gần nhất</div>
+  {% if stats.recent_events %}
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Thời gian</th>
+          <th>Loại sự kiện</th>
+          <th>Đối tượng (App / Domain)</th>
+          <th>Thời lượng</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ev in stats.recent_events %}
+        <tr>
+          <td>{{ ev.time }}</td>
+          <td>
+            {% if ev.type == 'screen_time' %}
+              <span class="badge badge-success">Sử dụng máy</span>
+            {% elif ev.type == 'app_blocked' %}
+              <span class="badge badge-danger">Chặn ứng dụng</span>
+            {% elif ev.type == 'web_blocked' %}
+              <span class="badge badge-warning">Chặn tên miền</span>
+            {% else %}
+              <span class="badge">{{ ev.type }}</span>
+            {% endif %}
+          </td>
+          <td><code>{{ ev.subject }}</code></td>
+          <td>{{ (ev.duration_sec // 60)|string ~ " phút " ~ (ev.duration_sec % 60)|string ~ "s" if ev.duration_sec > 0 else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div style="text-align: center; padding: 24px; color: var(--text-muted);">
+    Chưa có sự kiện nào được ghi nhận.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

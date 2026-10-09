@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Nhật ký kiểm toán · ChildGuard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Nhật ký kiểm toán (Audit Logs)</h1>
+    <div class="page-title-sub">Lưu vết toàn bộ thay đổi cấu hình, ghép đôi thiết bị và sự đồng ý theo Nghị định 13/2023/NĐ-CP</div>
+  </div>
+</div>
+
+<div class="card">
+  {% if logs %}
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Thời gian</th>
+          <th>Tác nhân</th>
+          <th>Hành động</th>
+          <th>Chi tiết dữ liệu</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in logs %}
+        <tr>
+          <td>{{ l.created_at }}</td>
+          <td><span class="badge">{{ l.actor_type }}</span></td>
+          <td><strong>{{ l.action }}</strong></td>
+          <td><code>{{ l.detail_json }}</code></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div style="text-align: center; padding: 40px; color: var(--text-muted);">
+    Chưa có bản ghi kiểm toán nào.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

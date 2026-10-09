@@ -29,6 +29,9 @@ class Parent(Base):
     id = Column(String(32), primary_key=True, default=_new_id)
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
+    full_name = Column(String(255), nullable=True, default="Phụ huynh")
+    failed_login_attempts = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -38,6 +41,7 @@ class Child(Base):
     id = Column(String(32), primary_key=True, default=_new_id)
     parent_id = Column(String(32), ForeignKey("parents.id"), nullable=False, index=True)
     display_name = Column(String(255), nullable=False)
+    gender = Column(String(10), nullable=True, default="other")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -46,6 +50,7 @@ class Device(Base):
 
     id = Column(String(32), primary_key=True, default=_new_id)
     child_id = Column(String(32), ForeignKey("children.id"), nullable=False, index=True)
+    device_name = Column(String(100), nullable=True, default="Máy tính của trẻ")
     # Băm của (Machine GUID + hostname) sinh TẠI AGENT — xem mục 5.1 trong
     # Design.md. Server không bao giờ nhận dữ liệu định danh thô.
     fingerprint_hash = Column(String(64), nullable=False)
@@ -102,6 +107,35 @@ class Command(Base):
     # delivered_at: NULL = agent chưa nhận được (đang chờ heartbeat/WS tiếp theo)
     delivered_at = Column(DateTime, nullable=True)
     acked_at = Column(DateTime, nullable=True)
+
+
+class EventLog(Base):
+    __tablename__ = "event_logs"
+
+    id = Column(String(32), primary_key=True, default=_new_id)
+    # Idempotency key sinh tại agent (hash của device_id + local_event_id)
+    idempotency_key = Column(String(64), unique=True, index=True, nullable=False)
+    device_id = Column(String(32), ForeignKey("devices.id"), nullable=False, index=True)
+    child_id = Column(String(32), ForeignKey("children.id"), nullable=False, index=True)
+    event_type = Column(String(50), nullable=False)  # screen_time | app_blocked | web_blocked | degraded_mode
+    subject = Column(String(255), nullable=True)  # Tên process (app) hoặc domain (web) bị chặn
+    duration_sec = Column(Integer, default=0, nullable=False)
+    policy_version = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ChildRequest(Base):
+    __tablename__ = "child_requests"
+
+    id = Column(String(32), primary_key=True, default=_new_id)
+    child_id = Column(String(32), ForeignKey("children.id"), nullable=False, index=True)
+    device_id = Column(String(32), ForeignKey("devices.id"), nullable=False, index=True)
+    request_type = Column(String(50), nullable=False)  # grant_time | unblock_app | unblock_web
+    subject = Column(String(255), nullable=True)  # ví dụ "15" (phút), hoặc tên app/domain
+    reason = Column(Text, nullable=True)
+    status = Column(String(20), default="pending", nullable=False)  # pending | approved | rejected
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    resolved_at = Column(DateTime, nullable=True)
 
 
 class AuditLog(Base):
