@@ -237,6 +237,7 @@ async def execute_dashboard_request(
 
 
 @router.get("/dashboard/policy", response_class=HTMLResponse)
+# Chỉnh lại để hiển thị version của policy hiện có
 def policy_page(
     request: Request,
     child_id: str | None = None,
@@ -277,9 +278,9 @@ def policy_page(
     blocked_domains_list = domain_rules.get("blacklist", [])
 
     return templates.TemplateResponse(
-        "policy.html",
-        {
-            "request": request,
+        request=request,
+        name="policy.html",
+        context={
             "active_page": "policy",
             "current_user": parent,
             "children": children,
@@ -349,9 +350,9 @@ def save_policy_page(
 
     children = db.query(models.Child).all()
     return templates.TemplateResponse(
+        request,
         "policy.html",
         {
-            "request": request,
             "active_page": "policy",
             "current_user": parent,
             "children": children,
@@ -391,8 +392,13 @@ def requests_page(
         )
 
     return templates.TemplateResponse(
+        request,
         "requests.html",
-        {"request": request, "active_page": "requests", "current_user": parent, "requests": rows},
+        {
+            "active_page": "requests",
+            "current_user": parent,
+            "requests": rows,
+        },
     )
 
 
@@ -447,8 +453,13 @@ def reports_page(
     }
 
     return templates.TemplateResponse(
+        request,
         "reports.html",
-        {"request": request, "active_page": "reports", "current_user": parent, "stats": stats},
+        {
+            "active_page": "reports",
+            "current_user": parent,
+            "stats": stats,
+        },
     )
 
 
@@ -474,8 +485,13 @@ def audit_page(
         )
 
     return templates.TemplateResponse(
+        request,
         "audit.html",
-        {"request": request, "active_page": "audit", "current_user": parent, "logs": rows},
+        {
+            "active_page": "audit",
+            "current_user": parent,
+            "logs": rows,
+        },
     )
 
 
@@ -514,6 +530,10 @@ def device_status_page(request: Request, db: Session = Depends(get_db)):
         )
 
     return templates.TemplateResponse(
+        request,
         "device_status.html",
-        {"request": request, "devices": rows, "generated_at": now.strftime("%H:%M:%S %d/%m/%Y")},
+        {
+            "devices": rows, 
+            "generated_at": now.strftime("%H:%M:%S %d/%m/%Y")
+        },
     )
