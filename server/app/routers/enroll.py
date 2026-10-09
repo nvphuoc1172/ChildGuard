@@ -5,6 +5,7 @@ nên MỌI lần gọi thành công đều phải ghi AuditLog — không bỏ q
 để tối ưu tốc độ.
 """
 import json
+import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -43,6 +44,7 @@ def enroll_device(payload: schemas.EnrollRequest, db: Session = Depends(get_db))
 
     # --- Tạo thiết bị mới ---
     device = models.Device(
+        id=uuid.uuid4().hex,  # gán tường minh: không phụ thuộc thời điểm flush
         child_id=enrollment.child_id,
         fingerprint_hash=payload.device_fingerprint,
         enrolled_at=now,
@@ -50,6 +52,10 @@ def enroll_device(payload: schemas.EnrollRequest, db: Session = Depends(get_db))
         status="active",
     )
     db.add(device)
+    db.flush()  # bắt buộc: sinh device.id ngay để dùng cho Token/AuditLog bên dưới
+    # (default=_new_id trên Column chỉ được SQLAlchemy áp dụng lúc flush,
+    # không phải lúc gọi db.add() — thiếu dòng này thì device.id vẫn là
+    # None tại đây, gây lỗi NOT NULL khi insert bảng tokens)
 
     # --- Đánh dấu mã đã dùng (không xoá — giữ lại phục vụ audit) ---
     enrollment.used_at = now
