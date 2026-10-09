@@ -53,13 +53,13 @@ flowchart LR
 
 ## 3. Thành phần hệ thống
 
-| Thành phần | Trách nhiệm chính | Công nghệ / Ghi chú kỹ thuật |
-|---|---|---|
-| **OGK-Agent — Service** | Áp chính sách, đếm thời gian sử dụng, chặn tiến trình/ứng dụng, lọc DNS, đệm sự kiện khi mất mạng | Python 3.11+, `pywin32` (`win32serviceutil.ServiceFramework`), `psutil` để liệt kê/kill tiến trình; đăng ký Service Recovery Options (SCM) để tự khởi động lại sau crash |
-| **OGK-Agent — Tray UI** | Giao diện cho trẻ: đồng hồ đếm ngược, lý do bị chặn, nút xin thêm giờ | Chạy trong phiên đăng nhập user (không phải SYSTEM); giao tiếp Service qua **named pipe** (ưu tiên) hoặc HTTP `127.0.0.1:<port>` kèm token cục bộ ngẫu nhiên sinh mỗi lần Service khởi động |
-| **OGK-Server** | Xác thực phụ huynh, quản lý thiết bị/trẻ, phát hành policy, nhận sự kiện, tổng hợp báo cáo, audit log | FastAPI + Uvicorn (ASGI), SQLAlchemy ORM, SQLite chế độ WAL, TLS đầu cuối, rate-limit theo IP/device_id |
-| **Dashboard phụ huynh** | Cấu hình quota/lịch tuần/whitelist-blacklist, duyệt yêu cầu "xin thêm giờ", xem báo cáo | Jinja2 + HTMX, responsive (dùng được trên trình duyệt điện thoại) |
-| **Kho dữ liệu cục bộ (Agent)** | Bản sao chính sách gần nhất + hàng đợi sự kiện chưa gửi | SQLite tại `%ProgramData%\ChildGuard\agent.db`, ACL chỉ `SYSTEM` và `Administrators` được ghi (dùng `icacls` khi cài đặt) |
+| Thành phần                             | Trách nhiệm chính                                                                                                   | Công nghệ / Ghi chú kỹ thuật                                                                                                                                                                                       |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OGK-Agent — Service**           | Áp chính sách, đếm thời gian sử dụng, chặn tiến trình/ứng dụng, lọc DNS, đệm sự kiện khi mất mạng  | Python 3.11+,`pywin32` (`win32serviceutil.ServiceFramework`), `psutil` để liệt kê/kill tiến trình; đăng ký Service Recovery Options (SCM) để tự khởi động lại sau crash                           |
+| **OGK-Agent — Tray UI**           | Giao diện cho trẻ: đồng hồ đếm ngược, lý do bị chặn, nút xin thêm giờ                                   | Chạy trong phiên đăng nhập user (không phải SYSTEM); giao tiếp Service qua**named pipe** (ưu tiên) hoặc HTTP `127.0.0.1:<port>` kèm token cục bộ ngẫu nhiên sinh mỗi lần Service khởi động |
+| **OGK-Server**                     | Xác thực phụ huynh, quản lý thiết bị/trẻ, phát hành policy, nhận sự kiện, tổng hợp báo cáo, audit log | FastAPI + Uvicorn (ASGI), SQLAlchemy ORM, SQLite chế độ WAL, TLS đầu cuối, rate-limit theo IP/device_id                                                                                                           |
+| **Dashboard phụ huynh**           | Cấu hình quota/lịch tuần/whitelist-blacklist, duyệt yêu cầu "xin thêm giờ", xem báo cáo                     | Jinja2 + HTMX, responsive (dùng được trên trình duyệt điện thoại)                                                                                                                                             |
+| **Kho dữ liệu cục bộ (Agent)** | Bản sao chính sách gần nhất + hàng đợi sự kiện chưa gửi                                                    | SQLite tại`%ProgramData%\ChildGuard\agent.db`, ACL chỉ `SYSTEM` và `Administrators` được ghi (dùng `icacls` khi cài đặt)                                                                              |
 
 ### 3.1. Sơ đồ tiến trình nội bộ Agent
 
@@ -80,17 +80,18 @@ flowchart TB
 
 Bảng chính (SQLAlchemy models), tên bảng số ít viết hoa cho ORM class, tên cột `snake_case`:
 
-| Bảng | Cột chính | Ghi chú |
-|---|---|---|
-| `Parent` | `id`, `email`, `password_hash`, `created_at` | Tài khoản phụ huynh |
-| `Child` | `id`, `parent_id`, `display_name`, `created_at` | Một phụ huynh có thể quản nhiều trẻ |
-| `Device` | `id (device_id, UUID)`, `child_id`, `fingerprint_hash`, `enrolled_at`, `last_seen_at`, `status (active/revoked)` | Sinh ra khi enrollment thành công |
-| `EnrollmentCode` | `code (8 ký tự)`, `parent_id`, `child_id`, `expires_at`, `used_at` | TTL 10 phút, một lần dùng |
-| `Token` | `id`, `device_id`, `access_token_hash`, `refresh_token_hash`, `access_expires_at`, `refresh_expires_at`, `revoked` | Access token ngắn hạn (vd 15 phút), refresh dài hạn (vd 30 ngày) |
-| `Policy` | `id`, `child_id`, `version (int, tăng dần)`, `quota_json`, `schedule_json`, `app_rules_json`, `domain_rules_json`, `created_at` | Mỗi lần sửa chính sách tạo **bản ghi mới** tăng `version`, không sửa đè — phục vụ audit và rollback |
-| `Event` | `id`, `device_id`, `event_type`, `payload_json`, `occurred_at`, `received_at`, `idempotency_key (unique)` | `idempotency_key` chống đếm trùng khi agent gửi lại theo lô |
-| `Command` | `id`, `device_id`, `command_type (lock/unlock/grant_minutes)`, `payload_json`, `created_at`, `delivered_at`, `acked_at` | Hàng đợi lệnh khẩn, ưu tiên đẩy qua WebSocket, fallback vào response heartbeat nếu WS rớt |
-| `AuditLog` | `id`, `actor_type (parent/agent/system)`, `actor_id`, `action`, `detail_json`, `created_at` | Ghi mọi hành động nhạy cảm: enrollment, đổi policy, duyệt yêu cầu, revoke device |
+| Bảng                  | Cột chính                                                                                                                                           | Ghi chú                                                                                                                                                                                           |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Parent**       | `id` (PK), `username`, `fullName`, `gender`, `hashPassword`, `failed_login_attempts`, `locked_until`, `createdAt`                     | Quản lý thông tin phụ huynh. Có quan hệ**M : N** với `Child` (Nhiều phụ huynh có thể cùng quản lý nhiều trẻ). Quan hệ **1 : N** với `AuditLog`                   |
+| **Child**        | `id` (PK), `username`, `fullName`, `gender`, `createdAt`                                                                                    | Quản lý thông tin trẻ em. Có quan hệ**M : N** với `Parent`. Có quan hệ **1 : 1** với `Policy`. Quan hệ **1 : N** với `Device`, `EventLog`, `ChildRequest`. |
+| **Device**       | `id` (PK), `child_id` (FK), `device_name`, `fingerprint_hash`, `refresh_token_hash`, `status`, `createdAt`                              | Thông tin thiết bị máy tính của trẻ. Liên kết thuộc về 1`Child`. Có quan hệ **1 : N** với `EventLog`, `ChildRequest`, và `Command`.                                   |
+| **Policy**       | `id` (PK), `child_id` (FK), `version`, `hmac_signature`, `quota_json`, `schedule_matrix`                                                  | Thiết lập giới hạn thời gian (JSON) và lịch biểu cho trẻ. Mỗi`Child` chỉ có duy nhất 1 `Policy`. Quan hệ **1 : N** tới `AppRule`, `WebRule`, `EventLog`.            |
+| **AppRule**      | `id` (PK), `policy_id` (FK), `process_name`, `sha256_hash`, `action`                                                                        | Quy tắc chặn/cho phép ứng dụng. Thuộc về 1`Policy`.                                                                                                                                       |
+| **WebRule**      | `id` (PK), `policy_id` (FK), `domain`, `action`                                                                                               | Quy tắc chặn/cho phép tên miền website. Thuộc về 1`Policy`.                                                                                                                               |
+| **EventLog**     | `id` (PK), `idempotency_key` (UNIQUE), `ts`, `device_id` (FK), `child_id` (FK), `type`, `subject`, `duration_sec`, `policy_id` (FK) | Ghi nhận sự kiện hệ thống/sử dụng. Trường`idempotency_key` dùng để chống đếm trùng khi agent đẩy log lên theo lô sau khi mất mạng.                                         |
+| **ChildRequest** | `id` (PK), `child_id` (FK), `device_id` (FK), `request_type`, `subject`, `status`, `createdAt`                                          | Lưu các yêu cầu từ phía agent của trẻ (xin thêm giờ, báo cáo chặn nhầm) để phụ huynh duyệt.                                                                                      |
+| **Command**      | `id` (PK), `device_id` (FK), `command_type`, `payload_json`, `created_at`, `received_at`, `acked_at`                                    | Hàng đợi chứa lệnh khẩn cấp (LOCK / UNLOCK / GRANT_TIME). Theo dõi thời gian tạo lệnh, agent nhận lệnh và xác nhận thành công.                                                   |
+| **AuditLog**     | `id` (PK), `parent_id` (FK), `action_type`, `ip_address`, `old_value` (JSON), `new_value` (JSON), `timestamp`                           | Lưu vết toàn bộ thay đổi cấu hình từ phụ huynh, đảm bảo tính minh bạch. Thuộc về 1`Parent`.                                                                                     |
 
 **Idempotency**: `idempotency_key` = `hash(device_id + local_event_id)`, sinh **tại agent** khi sự kiện xảy ra (không phải khi gửi) — vì vậy vẫn đúng cả khi agent gửi lại nhiều lần do mất kết nối giữa chừng.
 
@@ -122,6 +123,7 @@ sequenceDiagram
 ### 5.2. Nhịp tim (Heartbeat) — mỗi 60 giây
 
 Request: `POST /heartbeat`
+
 ```json
 {
   "device_id": "...",
@@ -130,7 +132,9 @@ Request: `POST /heartbeat`
   "queued_event_count": 2
 }
 ```
+
 Response:
+
 ```json
 {
   "policy_version": 4,
@@ -140,6 +144,7 @@ Response:
   ]
 }
 ```
+
 - Nếu `policy_changed = true` → agent gọi `GET /policy?since_version=3` để lấy đầy đủ bản mới, áp dụng, rồi cập nhật `policy_version` cục bộ.
 - Heartbeat **không** phải kênh chính cho lệnh khẩn (xem 5.3) vì độ trễ tối đa của heartbeat có thể lên đến gần 60s — không đạt yêu cầu <5s.
 
@@ -162,13 +167,14 @@ Response:
 
 **Quyết định: FAIL-CLOSED có kiểm soát (không fail-open tuyệt đối), theo 2 giai đoạn.**
 
-| Giai đoạn | Điều kiện | Hành vi |
-|---|---|---|
-| **Giai đoạn 1 — Enforce cứng** | Mất kết nối server từ 0 đến N₁ ngày (đề xuất N₁ = 3) | Tiếp tục áp **nguyên vẹn** policy đã cache: đúng quota, đúng lịch, đúng app/domain rules. Tray UI hiển thị rõ "Không kết nối được máy chủ — vẫn đang dùng chính sách đã lưu từ [ngày]". |
-| **Giai đoạn 2 — Chế độ an toàn suy giảm (degraded safe-mode)** | Mất kết nối > N₁ ngày, tới N₂ ngày (đề xuất N₂ = 14) | Chuyển sang **policy an toàn mặc định** cứng trong agent (không phải mở toàn bộ): chỉ cho phép danh sách ứng dụng giáo dục/hệ thống tối thiểu đã whitelist sẵn (trình duyệt, ứng dụng văn phòng, không giới hạn giờ), chặn toàn bộ domain ngoài whitelist DNS an toàn (vd danh sách domain giáo dục cơ bản). Ghi log rõ ràng "degraded_mode_entered" để audit. |
-| **Sau N₂ ngày** | — | Vẫn giữ nguyên trạng thái degraded safe-mode, **không** bao giờ tự mở khóa hoàn toàn (fail-open) chỉ vì thời gian trôi qua. Gỡ bỏ hoàn toàn yêu cầu quyền Administrator tại máy (gỡ cài đặt) hoặc mã "unlock khẩn cấp" ký số cấp riêng cho phụ huynh lúc enrollment (lưu offline, không qua mạng). |
+| Giai đoạn                                                                  | Điều kiện                                                     | Hành vi                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Giai đoạn 1 — Enforce cứng**                                     | Mất kết nối server từ 0 đến N₁ ngày (đề xuất N₁ = 3) | Tiếp tục áp**nguyên vẹn** policy đã cache: đúng quota, đúng lịch, đúng app/domain rules. Tray UI hiển thị rõ "Không kết nối được máy chủ — vẫn đang dùng chính sách đã lưu từ [ngày]".                                                                                                                                                                                     |
+| **Giai đoạn 2 — Chế độ an toàn suy giảm (degraded safe-mode)** | Mất kết nối > N₁ ngày, tới N₂ ngày (đề xuất N₂ = 14) | Chuyển sang**policy an toàn mặc định** cứng trong agent (không phải mở toàn bộ): chỉ cho phép danh sách ứng dụng giáo dục/hệ thống tối thiểu đã whitelist sẵn (trình duyệt, ứng dụng văn phòng, không giới hạn giờ), chặn toàn bộ domain ngoài whitelist DNS an toàn (vd danh sách domain giáo dục cơ bản). Ghi log rõ ràng "degraded_mode_entered" để audit. |
+| **Sau N₂ ngày**                                                      | —                                                               | Vẫn giữ nguyên trạng thái degraded safe-mode,**không** bao giờ tự mở khóa hoàn toàn (fail-open) chỉ vì thời gian trôi qua. Gỡ bỏ hoàn toàn yêu cầu quyền Administrator tại máy (gỡ cài đặt) hoặc mã "unlock khẩn cấp" ký số cấp riêng cho phụ huynh lúc enrollment (lưu offline, không qua mạng).                                                                    |
 
 **Lý do bảo vệ lựa chọn này (không chọn fail-open):**
+
 1. **Chống bypass tầm thường** — nếu agent fail-open sau N ngày mất mạng, một đứa trẻ chỉ cần rút cáp mạng/chặn agent gọi ra ngoài (vd sửa file hosts, chặn qua firewall) trong đúng N ngày là vô hiệu hóa toàn bộ hệ thống. Đây là lỗ hổng logic nghiêm trọng nhất có thể bị khai thác, nên thiết kế phải loại trừ nó bằng nguyên tắc.
 2. **Không "brick" thiết bị vĩnh viễn** — nếu chọn fail-closed tuyệt đối (giữ nguyên policy chặt vô thời hạn), rủi ro là nếu phụ huynh ngừng dịch vụ/gỡ server mà quên gỡ agent đúng cách, máy trẻ bị khóa quá mức không có lối thoát hợp lệ. Giai đoạn 2 (degraded safe-mode) giải quyết việc này: máy vẫn dùng được ở mức tối thiểu (học tập), không bị "chết cứng", nhưng cũng không quay lại mở hoàn toàn.
 3. **Cơ chế thoát an toàn thuộc về con người, không phải thời gian** — việc "mở khóa" chỉ nên xảy ra qua hành động có thẩm quyền rõ ràng (gỡ cài đặt bằng quyền Admin, hoặc mã unlock ký số phát tại thời điểm enrollment), không nên là hệ quả tự động của việc chờ đủ N ngày.
@@ -179,20 +185,20 @@ Response:
 
 ## 6. Đặc tả API (OGK-Server)
 
-| Method & Path | Auth | Mô tả |
-|---|---|---|
-| `POST /auth/login` | Không (nhập email/mật khẩu) | Phụ huynh đăng nhập, trả JWT session cho dashboard |
-| `POST /enroll` | Enrollment code | Ghép đôi thiết bị mới, trả `device_id` + token pair |
-| `POST /auth/refresh` | Refresh token | Cấp access token mới |
-| `GET /policy?since_version=` | Access token (agent) | Lấy policy đầy đủ nếu có bản mới hơn `since_version` |
-| `POST /policy` | Session (parent, qua dashboard) | Tạo phiên bản policy mới cho một child |
-| `POST /heartbeat` | Access token (agent) | Vòng lặp 60s: gửi trạng thái, nhận version + lệnh chờ |
-| `WS /ws/{device_id}` | Access token (agent, qua query/header lúc handshake) | Kênh lệnh khẩn thời gian thực |
-| `POST /events/batch` | Access token (agent) | Gửi lô sự kiện đã đệm, kèm `idempotency_key` mỗi event |
-| `POST /commands` | Session (parent) | Phụ huynh phát lệnh khẩn (lock/unlock/grant_minutes) |
-| `POST /commands/{id}/ack` | Access token (agent) | Agent xác nhận đã thực thi lệnh |
-| `GET /reports/{child_id}` | Session (parent) | Báo cáo tổng hợp thời gian sử dụng, app, domain đã chặn |
-| `GET /audit` | Session (parent, chỉ xem của con mình) | Xem nhật ký kiểm toán liên quan |
+| Method & Path                  | Auth                                                  | Mô tả                                                           |
+| ------------------------------ | ----------------------------------------------------- | ----------------------------------------------------------------- |
+| `POST /auth/login`           | Không (nhập email/mật khẩu)                       | Phụ huynh đăng nhập, trả JWT session cho dashboard           |
+| `POST /enroll`               | Enrollment code                                       | Ghép đôi thiết bị mới, trả`device_id` + token pair       |
+| `POST /auth/refresh`         | Refresh token                                         | Cấp access token mới                                            |
+| `GET /policy?since_version=` | Access token (agent)                                  | Lấy policy đầy đủ nếu có bản mới hơn`since_version`   |
+| `POST /policy`               | Session (parent, qua dashboard)                       | Tạo phiên bản policy mới cho một child                       |
+| `POST /heartbeat`            | Access token (agent)                                  | Vòng lặp 60s: gửi trạng thái, nhận version + lệnh chờ     |
+| `WS /ws/{device_id}`         | Access token (agent, qua query/header lúc handshake) | Kênh lệnh khẩn thời gian thực                                |
+| `POST /events/batch`         | Access token (agent)                                  | Gửi lô sự kiện đã đệm, kèm`idempotency_key` mỗi event |
+| `POST /commands`             | Session (parent)                                      | Phụ huynh phát lệnh khẩn (lock/unlock/grant_minutes)          |
+| `POST /commands/{id}/ack`    | Access token (agent)                                  | Agent xác nhận đã thực thi lệnh                             |
+| `GET /reports/{child_id}`    | Session (parent)                                      | Báo cáo tổng hợp thời gian sử dụng, app, domain đã chặn |
+| `GET /audit`                 | Session (parent, chỉ xem của con mình)             | Xem nhật ký kiểm toán liên quan                              |
 
 Tất cả endpoint có rate-limit theo `device_id` hoặc `parent_id` (vd `slowapi` middleware) để chống lạm dụng heartbeat/spam.
 
@@ -334,11 +340,11 @@ ChildGuard/
 
 ## 9. Môi trường triển khai đề xuất
 
-| Máy | Vai trò | Ghi chú |
-|---|---|---|
-| Windows 10 (máy vật lý của bạn) | Chạy & test **OGK-Agent** thực tế | Cần quyền Administrator để cài Windows Service |
-| VMware — Debian nhẹ (tương thích Ubuntu) | Chạy **OGK-Server** | Debian 12 "bookworm" tương thích tốt với các hướng dẫn Ubuntu (cùng dòng apt/systemd); dùng bản netinst tối giản, chỉ cài thêm Python 3.11+, không cần GUI |
-| Windows 10 (trình duyệt) hoặc điện thoại trong cùng LAN | Truy cập **Dashboard** | Kiểm tra route LAN giữa Windows host và VM (bridged network trong VMware) |
+| Máy                                                           | Vai trò                                  | Ghi chú                                                                                                                                                                       |
+| -------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Windows 10 (máy vật lý của bạn)                           | Chạy & test**OGK-Agent** thực tế | Cần quyền Administrator để cài Windows Service                                                                                                                            |
+| VMware — Debian nhẹ (tương thích Ubuntu)                  | Chạy**OGK-Server**                 | Debian 12 "bookworm" tương thích tốt với các hướng dẫn Ubuntu (cùng dòng apt/systemd); dùng bản netinst tối giản, chỉ cài thêm Python 3.11+, không cần GUI |
+| Windows 10 (trình duyệt) hoặc điện thoại trong cùng LAN | Truy cập**Dashboard**              | Kiểm tra route LAN giữa Windows host và VM (bridged network trong VMware)                                                                                                   |
 
 Ở bước tiếp theo (khi bạn sẵn sàng cho phần thực thi), mình sẽ hướng dẫn theo đúng thứ tự: (1) chuẩn bị VM Debian + cài Python/dependencies cho server, (2) chuẩn bị máy Windows cho agent (Python, pywin32, quyền Service), (3) viết code từng module theo thứ tự server → agent service → tray UI → dashboard, (4) test tích hợp giữa 2 máy qua LAN, (5) đóng gói cài đặt (installer/script) và tài liệu.
 
