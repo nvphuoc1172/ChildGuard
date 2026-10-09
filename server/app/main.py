@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.database import Base, engine
+from app.database import Base, auto_migrate, engine
 from app.routers import (
     auth,
     commands,
@@ -32,7 +32,9 @@ async def lifespan(app: FastAPI):
     # Dev-only: tạo bảng trực tiếp từ models. Khi dự án lớn hơn, thay bằng
     # Alembic migrations (thư mục server/migrations/ đã có trong cấu trúc).
     Base.metadata.create_all(bind=engine)
+    auto_migrate(engine)
     yield
+
 
 
 app = FastAPI(title="OGK-Server", version="0.1.0", lifespan=lifespan)

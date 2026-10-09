@@ -39,3 +39,37 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def auto_migrate(db_engine=engine):
+    """Tự động kiểm tra và thêm các cột mới vào các bảng SQLite đã tồn tại trước đó,
+    tránh lỗi 'no such column' khi nâng cấp schema mà không dùng Alembic.
+    """
+    with db_engine.connect() as conn:
+        # 1. Bảng parents
+        res = conn.exec_driver_sql("PRAGMA table_info(parents)")
+        parent_cols = {row[1] for row in res.fetchall()}
+        if parent_cols:
+            if "full_name" not in parent_cols:
+                conn.exec_driver_sql("ALTER TABLE parents ADD COLUMN full_name VARCHAR(255) DEFAULT 'Phụ huynh'")
+            if "failed_login_attempts" not in parent_cols:
+                conn.exec_driver_sql("ALTER TABLE parents ADD COLUMN failed_login_attempts INTEGER DEFAULT 0 NOT NULL")
+            if "locked_until" not in parent_cols:
+                conn.exec_driver_sql("ALTER TABLE parents ADD COLUMN locked_until DATETIME")
+
+        # 2. Bảng children
+        res = conn.exec_driver_sql("PRAGMA table_info(children)")
+        child_cols = {row[1] for row in res.fetchall()}
+        if child_cols:
+            if "gender" not in child_cols:
+                conn.exec_driver_sql("ALTER TABLE children ADD COLUMN gender VARCHAR(10) DEFAULT 'other'")
+
+        # 3. Bảng devices
+        res = conn.exec_driver_sql("PRAGMA table_info(devices)")
+        dev_cols = {row[1] for row in res.fetchall()}
+        if dev_cols:
+            if "device_name" not in dev_cols:
+                conn.exec_driver_sql("ALTER TABLE devices ADD COLUMN device_name VARCHAR(100) DEFAULT 'Máy tính của trẻ'")
+
+        conn.commit()
+
