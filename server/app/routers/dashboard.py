@@ -150,11 +150,10 @@ def dashboard_overview(
         .order_by(models.ChildRequest.created_at.desc())
         .all()
     )
-
     return templates.TemplateResponse(
-        "overview.html",
-        {
-            "request": request,
+        request=request,
+        name="overview.html",
+        context={
             "active_page": "overview",
             "current_user": parent,
             "children_data": children_data,
