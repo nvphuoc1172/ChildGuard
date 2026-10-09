@@ -49,7 +49,13 @@ def _get_or_create_demo_parent(db: Session) -> models.Parent:
 
 @router.get("/dashboard/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    return templates.TemplateResponse(
+        request,
+        "login.html", 
+        {
+            "error": None
+        }
+    )
 
 
 @router.post("/dashboard/login", response_class=HTMLResponse)
@@ -67,8 +73,9 @@ def process_login(
     )
     if not parent or not security.verify_password(password, parent.password_hash):
         return templates.TemplateResponse(
+            request,
             "login.html",
-            {"request": request, "error": "Email hoặc mật khẩu không chính xác."},
+            {"error": "Email hoặc mật khẩu không chính xác."},
             status_code=401,
         )
 
