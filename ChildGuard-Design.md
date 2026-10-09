@@ -83,7 +83,7 @@ Bảng chính (SQLAlchemy models), tên bảng số ít viết hoa cho ORM class
 | Bảng | Cột chính | Ghi chú |
 |---|---|---|
 | `Parent` | `id`, `email`, `password_hash`, `created_at` | Tài khoản phụ huynh |
-| `Child` | `id`, `parent_id`, `display_name`, `birth_year (tuỳ chọn)` | Một phụ huynh có thể quản nhiều trẻ |
+| `Child` | `id`, `parent_id`, `display_name`, `created_at` | Một phụ huynh có thể quản nhiều trẻ |
 | `Device` | `id (device_id, UUID)`, `child_id`, `fingerprint_hash`, `enrolled_at`, `last_seen_at`, `status (active/revoked)` | Sinh ra khi enrollment thành công |
 | `EnrollmentCode` | `code (8 ký tự)`, `parent_id`, `child_id`, `expires_at`, `used_at` | TTL 10 phút, một lần dùng |
 | `Token` | `id`, `device_id`, `access_token_hash`, `refresh_token_hash`, `access_expires_at`, `refresh_expires_at`, `revoked` | Access token ngắn hạn (vd 15 phút), refresh dài hạn (vd 30 ngày) |

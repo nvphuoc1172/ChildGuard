@@ -41,10 +41,12 @@ python -m pip install --upgrade pip wheel
 
 Tại sao không dùng chứng chỉ tự ký đơn giản? Agent sẽ xác minh server bằng một CA cố định (certificate pinning theo CA) thay vì tắt kiểm tra — đúng yêu cầu "TLS 1.2+". Cách làm: tạo 1 CA nội bộ, dùng nó ký chứng chỉ server; máy Windows chỉ cần tin file ogk-ca.crt.
 
+copy và dán vào máy server khi có thay đổi về địa chỉ ip mạng (lệnh ip a):
+
 ```bash
 
 cd /opt/childguard/certs
-SERVER_IP=192.168.1.50        # <-- ĐỔI thành IP thật của VM
+SERVER_IP=192.168.83.128       # <-- ĐỔI thành IP thật của VM
 
 # 1) CA nội bộ (hiệu lực 10 năm)
 openssl genrsa -out ogk-ca.key 4096
