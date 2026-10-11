@@ -70,7 +70,7 @@ def main():
     dns_thread.start()
 
     # 4. Khởi tạo Sync Worker (WebSocket + Heartbeat)
-    sync_worker = SyncWorker(storage, enforcer, config, ca_cert_path)
+    sync_worker = SyncWorker(storage, enforcer, config, ca_cert_path, dns_proxy=dns_proxy)
     sync_thread = threading.Thread(target=sync_worker.run_heartbeat_loop, daemon=True)
     sync_thread.start()
     print("[Agent] ✓ Sync Worker đã chạy (WebSocket lệnh khẩn <5s & Heartbeat)")

@@ -322,7 +322,18 @@ def save_policy_page(
         raise HTTPException(status_code=404, detail="child_not_found")
 
     app_list = [line.strip().lower() for line in blocked_apps.splitlines() if line.strip()]
-    domain_list = [line.strip().lower() for line in blocked_domains.splitlines() if line.strip()]
+    domain_list = []
+    for line in blocked_domains.splitlines():
+        d = line.strip().lower()
+        if not d:
+            continue
+        if d.startswith("http://"):
+            d = d[7:]
+        elif d.startswith("https://"):
+            d = d[8:]
+        d = d.split("/")[0].split(":")[0].strip()
+        if d and d not in domain_list:
+            domain_list.append(d)
 
     latest = (
         db.query(models.Policy)

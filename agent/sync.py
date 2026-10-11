@@ -30,9 +30,11 @@ class SyncWorker:
         enforcer: PolicyEnforcer,
         state_config: dict,
         ca_cert_path: str,
+        dns_proxy=None,
     ):
         self.storage = storage
         self.enforcer = enforcer
+        self.dns_proxy = dns_proxy
         self.server = state_config["server"]
         self.port = state_config.get("port", 8443)
         self.device_id = state_config["device_id"]
@@ -76,6 +78,8 @@ class SyncWorker:
         policy_data = self._http_request("/policy", method="GET")
         self.storage.save_policy(policy_data)
         print(f"[Sync] Đã cập nhật chính sách phiên bản v{policy_data.get('version')} thành công.")
+        if self.dns_proxy:
+            self.dns_proxy.sync_policy_rules(policy_data)
 
     def flush_events_batch(self):
         events = self.storage.get_pending_events(limit=100)
@@ -105,7 +109,7 @@ class SyncWorker:
     def execute_command(self, cmd_id: str, cmd_type: str, payload: dict):
         print(f"[Sync] ⚡ THỰC THI LỆNH KHẨN: {cmd_type} (id={cmd_id}, payload={payload})")
         if cmd_type == "lock":
-            self.enforcer.lock_workstation()
+            self.enforcer.lock_workstation(manual=True)
         elif cmd_type == "unlock":
             self.enforcer.unlock_workstation()
         elif cmd_type == "grant_minutes":

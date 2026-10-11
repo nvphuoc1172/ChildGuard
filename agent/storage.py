@@ -123,6 +123,14 @@ class AgentStorage:
                 """,
                 (version, quota_json, schedule_json, app_rules_json, domain_rules_json, now_str),
             )
+            # Nếu quota mới lớn hơn thời gian đã sử dụng, tự động mở khóa
+            quota_dict = policy_data.get("quota", {})
+            daily_mins = quota_dict.get("daily_minutes")
+            if daily_mins:
+                row_state = conn.execute("SELECT quota_used_seconds FROM agent_state WHERE id = 1").fetchone()
+                used_sec = row_state["quota_used_seconds"] if row_state else 0
+                if used_sec < int(daily_mins) * 60:
+                    conn.execute("UPDATE agent_state SET is_locked = 0 WHERE id = 1")
             conn.commit()
 
     def add_event(self, event_type: str, subject: str | None = None, duration_sec: int = 0, policy_version: int | None = None) -> str:
@@ -166,8 +174,8 @@ class AgentStorage:
         placeholders = ",".join("?" for _ in event_ids)
         with self._get_connection() as conn:
             conn.execute(f"UPDATE event_queue SET sent = 1 WHERE id IN ({placeholders})", event_ids)
-            # Dọn dẹp các event đã gửi quá 7 ngày
-            conn.execute("DELETE FROM event_queue WHERE sent = 1 AND id IN (" + placeholders + ")")
+            # Dọn dẹp các event đã gửi
+            conn.execute("DELETE FROM event_queue WHERE sent = 1 AND id IN (" + placeholders + ")", event_ids)
             conn.commit()
 
     def get_screen_time_today(self) -> int:

@@ -2,8 +2,8 @@
 
 Chạy trong phiên người dùng (user session):
 - Hiển thị biểu tượng ở khay hệ thống (System Tray).
-- Cập nhật thời gian còn lại (đếm ngược).
-- Màn hình minh bạch: Xem chính sách mà phụ huynh đã đặt (giờ giấc, app cấm, web cấm).
+- Cập nhật thời gian còn lại (đếm ngược thời gian thực mỗi 2 giây).
+- Màn hình minh bạch: Xem chính sách mà phụ huynh đã đặt (tự động cập nhật thời gian thực).
 - Nút "Xin thêm giờ": Gửi yêu cầu qua IPC lên Server để phụ huynh phê duyệt.
 """
 from __future__ import annotations
@@ -58,32 +58,23 @@ class TrayApp:
             return False
 
     def create_tray_image(self, text: str = "🛡️"):
-        # Vẽ một biểu tượng khiên bảo vệ đơn giản 64x64
         img = Image.new("RGBA", (64, 64), color=(0, 0, 0, 0))
         d = ImageDraw.Draw(img)
-        # Vẽ hình khiên màu xanh dương
         d.polygon([(32, 4), (60, 16), (60, 44), (32, 60), (4, 44), (4, 16)], fill=(59, 130, 246, 255))
         d.polygon([(32, 8), (56, 18), (56, 42), (32, 56), (8, 42), (8, 18)], fill=(30, 41, 59, 255))
         d.ellipse([(24, 24), (40, 40)], fill=(16, 185, 129, 255))
         return img
 
     def show_transparency_window(self):
-        """Màn hình minh bạch: cho trẻ xem toàn bộ chính sách đang áp dụng."""
+        """Màn hình minh bạch: cho trẻ xem toàn bộ chính sách và đếm thời gian thực."""
         if not tk:
             return
 
         def _open():
             root = tk.Tk()
             root.title("ChildGuard — Chính sách bảo vệ của gia đình")
-            root.geometry("480x420")
+            root.geometry("480x430")
             root.configure(bg="#0f172a")
-
-            status = self.fetch_status()
-            policy = status.get("policy", {})
-            quota = policy.get("quota", {})
-            schedule = policy.get("schedule", {})
-            app_rules = policy.get("app_rules", {})
-            domain_rules = policy.get("domain_rules", {})
 
             title_lbl = tk.Label(
                 root,
@@ -106,18 +97,39 @@ class TrayApp:
             frame = tk.Frame(root, bg="#1e293b", padx=16, pady=16)
             frame.pack(fill="both", expand=True, padx=16, pady=16)
 
-            info_text = (
-                f"⏱️ Hạn mức mỗi ngày: {quota.get('daily_minutes', 120)} phút\n"
-                f"⏳ Đã sử dụng hôm nay: {status.get('used_minutes', 0)} phút\n"
-                f"🟢 Thời gian còn lại: {status.get('remaining_minutes', 0)} phút\n\n"
-                f"📅 Khung giờ cho phép: {schedule.get('start_time', '07:00')} đến {schedule.get('end_time', '21:30')}\n\n"
-                f"🚫 Ứng dụng bị hạn chế:\n"
-                f"  {', '.join(app_rules.get('blacklist', [])) or 'Không có'}\n\n"
-                f"🌐 Website bị hạn chế:\n"
-                f"  {', '.join(domain_rules.get('blacklist', [])) or 'Không có'}\n"
-            )
+            info_var = tk.StringVar()
 
-            msg = tk.Label(frame, text=info_text, justify="left", fg="#f8fafc", bg="#1e293b", font=("Segoe UI", 11))
+            def _update_info():
+                if not root.winfo_exists():
+                    return
+                st = self.fetch_status()
+                pol = st.get("policy", {})
+                q = pol.get("quota", {})
+                sch = pol.get("schedule", {})
+                ar = pol.get("app_rules", {})
+                dr = pol.get("domain_rules", {})
+
+                d_quota = q.get("daily_minutes", st.get("daily_quota", 120))
+                u_min = st.get("used_minutes", 0)
+                r_min = st.get("remaining_minutes", 0)
+                is_locked = st.get("is_locked", False)
+                lock_tag = " (🔒 Đang khóa)" if is_locked else " (🟢 Đang dùng)"
+
+                info_var.set(
+                    f"⏱️ Hạn mức mỗi ngày: {d_quota} phút\n"
+                    f"⏳ Đã sử dụng hôm nay: {u_min} phút\n"
+                    f"🟢 Thời gian còn lại: {r_min} phút{lock_tag}\n\n"
+                    f"📅 Khung giờ cho phép: {sch.get('start_time', '07:00')} đến {sch.get('end_time', '21:30')}\n\n"
+                    f"🚫 Ứng dụng bị hạn chế:\n"
+                    f"  {', '.join(ar.get('blacklist', [])) or 'Không có'}\n\n"
+                    f"🌐 Website bị hạn chế:\n"
+                    f"  {', '.join(dr.get('blacklist', [])) or 'Không có'}\n"
+                )
+                root.after(2000, _update_info)
+
+            _update_info()
+
+            msg = tk.Label(frame, textvariable=info_var, justify="left", fg="#f8fafc", bg="#1e293b", font=("Segoe UI", 11))
             msg.pack(anchor="w")
 
             btn_close = tk.Button(
@@ -225,21 +237,46 @@ class TrayApp:
 
         image = self.create_tray_image()
 
-        def _get_time_label(item):
+        def _get_time_text():
             st = self.fetch_status()
-            rem = st.get("remaining_minutes", "—")
-            return f"⏳ Còn lại: {rem} phút"
+            rem = st.get("remaining_minutes", 0)
+            quota = st.get("daily_quota", 0)
+            used = st.get("used_minutes", 0)
+            is_locked = st.get("is_locked", False)
+            if is_locked or rem <= 0:
+                return f"🔒 Đã khóa (Còn lại: 0/{quota} phút)"
+            return f"⏳ Còn lại: {rem} / {quota} phút (Đã dùng: {used}p)"
 
-        menu = pystray.Menu(
-            pystray.MenuItem(_get_time_label, None, enabled=False),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("📋 Xem chính sách bảo vệ", lambda: self.show_transparency_window()),
-            pystray.MenuItem("🙋 Xin thêm giờ...", lambda: self.show_request_window()),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Thoát", lambda: self.stop()),
-        )
+        def _build_menu():
+            return pystray.Menu(
+                pystray.MenuItem(_get_time_text(), None, enabled=False),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("📋 Xem chính sách bảo vệ", lambda: self.show_transparency_window()),
+                pystray.MenuItem("🙋 Xin thêm giờ...", lambda: self.show_request_window()),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Thoát", lambda: self.stop()),
+            )
 
-        self.icon = pystray.Icon("ChildGuard", image, "ChildGuard — Đang bảo vệ", menu)
+        self.icon = pystray.Icon("ChildGuard", image, "ChildGuard — Đang bảo vệ", _build_menu())
+
+        # Vòng lặp nền cập nhật trực tiếp tooltip và menu mỗi 2 giây
+        def _updater():
+            while self.running:
+                time.sleep(2)
+                if self.icon and getattr(self.icon, "visible", False):
+                    try:
+                        st = self.fetch_status()
+                        rem = st.get("remaining_minutes", 0)
+                        quota = st.get("daily_quota", 0)
+                        is_locked = st.get("is_locked", False)
+                        status_str = "Đã khóa" if (is_locked or rem <= 0) else f"Còn {rem}p"
+                        self.icon.title = f"ChildGuard — {status_str} ({rem}/{quota} phút)"
+                        self.icon.menu = _build_menu()
+                        self.icon.update_menu()
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_updater, daemon=True).start()
         print("[Tray] Đã khởi chạy biểu tượng khay hệ thống (System Tray).")
         self.icon.run()
 
