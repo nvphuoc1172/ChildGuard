@@ -191,6 +191,22 @@ class TrayApp:
                     font=("Segoe UI", 11),
                 ).pack(side="left", padx=10)
 
+            # Ô nhập số phút tùy chỉnh
+            tk.Radiobutton(
+                btn_frame,
+                text="Khác:",
+                variable=minutes_var,
+                value=0, # Giá trị 0 đánh dấu là dùng ô nhập tay
+                fg="#f8fafc",
+                bg="#0f172a",
+                selectcolor="#1e293b",
+                font=("Segoe UI", 11),
+            ).pack(side="left", padx=(10, 2))
+            
+            custom_min_entry = tk.Entry(btn_frame, font=("Segoe UI", 11), bg="#1e293b", fg="#f8fafc", width=5, insertbackground="white")
+            custom_min_entry.pack(side="left", padx=2)
+            custom_min_entry.insert(0, "90")
+            
             tk.Label(
                 root,
                 text="Lý do xin thêm (để phụ huynh duyệt):",

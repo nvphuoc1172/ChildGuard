@@ -57,6 +57,15 @@ class SyncWorker:
         req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
         with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
             return json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                print(f"[Sync] CẢNH BÁO: Token bị từ chối (HTTP {e.code}). Có thể Server đã bị reset dữ liệu.")
+                # Tạm thời vô hiệu hóa vòng lặp để tránh spam log, chờ cấp token mới
+                self.running = False 
+            raise e
 
     def send_heartbeat(self) -> dict:
         policy = self.storage.get_policy()
