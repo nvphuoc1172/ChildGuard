@@ -32,21 +32,6 @@ class PolicyEnforcer:
         self._last_tick_time = time.time()
         self._screen_time_buffer = 0
 
-    def is_windows_locked(self) -> bool:
-        """Kiểm tra màn hình Windows có đang ở trạng thái khóa (Lock screen / Winlogon) hay không."""
-        if sys.platform != "win32":
-            return False
-        try:
-            user32 = ctypes.windll.user32
-            # OpenInputDesktop trả về 0 nếu workstation đang bị khóa hoặc ở secure desktop
-            h_desk = user32.OpenInputDesktop(0, False, 0x0100)  # 0x0100 = DESKTOP_SWITCHDESKTOP
-            if not h_desk:
-                return True
-            user32.CloseDesktop(h_desk)
-            return False
-        except Exception:
-            return False
-
     def lock_workstation(self, manual: bool = False):
         """Khóa màn hình máy tính Windows."""
         if manual:
@@ -55,9 +40,8 @@ class PolicyEnforcer:
 
         if sys.platform == "win32":
             try:
-                if not self.is_windows_locked():
-                    print("[Enforcer] 🔒 ĐANG THỰC HIỆN KHÓA MÁY (LockWorkStation)...")
-                    ctypes.windll.user32.LockWorkStation()
+                print("[Enforcer] 🔒 ĐANG THỰC HIỆN KHÓA MÁY (LockWorkStation)...")
+                ctypes.windll.user32.LockWorkStation()
             except Exception as e:
                 print(f"[Enforcer] Lỗi gọi LockWorkStation: {e}")
         else:
@@ -100,18 +84,35 @@ class PolicyEnforcer:
     def scan_and_enforce_processes(self, policy: dict):
         """Quét tiến trình đang chạy và terminate các ứng dụng trong blacklist."""
         app_rules = policy.get("app_rules", {})
-        blacklist = [app.lower().strip() for app in app_rules.get("blacklist", []) if app.strip()]
-        if not blacklist:
+        if isinstance(app_rules, list):
+            raw_blacklist = app_rules
+        elif isinstance(app_rules, dict):
+            raw_blacklist = app_rules.get("blacklist", [])
+        else:
+            raw_blacklist = []
+
+        if not raw_blacklist:
             return
+
+        cleaned_blacklist = set()
+        for b in raw_blacklist:
+            if not b:
+                continue
+            b_str = str(b).strip().lower()
+            b_name = Path(b_str).name
+            cleaned_blacklist.add(b_name)
+            cleaned_blacklist.add(b_name.removesuffix(".exe"))
 
         for proc in psutil.process_iter(["pid", "name"]):
             try:
                 pname = (proc.info["name"] or "").lower()
-                # Kiểm tra cả tên đầy đủ hoặc tên không có .exe
-                matched = any(pname == b or pname.removesuffix(".exe") == b.removesuffix(".exe") for b in blacklist)
-                if matched:
+                pname_no_exe = pname.removesuffix(".exe")
+                if pname in cleaned_blacklist or pname_no_exe in cleaned_blacklist:
                     print(f"[Enforcer] 🚫 PHÁT HIỆN ỨNG DỤNG BỊ CẤM: {pname} (PID: {proc.info['pid']}) -> TIẾN HÀNH ĐÓNG!")
-                    proc.terminate()
+                    try:
+                        proc.kill()
+                    except Exception:
+                        proc.terminate()
                     self.storage.add_event(
                         event_type="app_blocked",
                         subject=pname,
@@ -173,9 +174,8 @@ class PolicyEnforcer:
                         print("[Enforcer] 🔓 Đủ điều kiện sử dụng máy -> Giải phóng trạng thái khóa.")
                         self.storage.set_lock_status(False)
 
-                    # 3. Đếm thời gian sử dụng màn hình (chỉ đếm khi máy không bị khóa màn hình)
-                    session_locked = self.is_windows_locked()
-                    if not session_locked and elapsed > 0:
+                    # 3. Đếm thời gian sử dụng màn hình (khi máy không bị khóa bởi chính sách)
+                    if elapsed > 0:
                         used_seconds = self.storage.add_screen_time(elapsed)
                         self._screen_time_buffer += elapsed
 

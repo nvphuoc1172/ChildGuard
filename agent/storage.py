@@ -28,8 +28,12 @@ class AgentStorage:
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=15.0)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+        except Exception:
+            pass
         return conn
 
     def _init_db(self):
@@ -85,7 +89,7 @@ class AgentStorage:
             row = conn.execute("SELECT * FROM cached_policy WHERE id = 1").fetchone()
             if not row:
                 return {
-                    "version": 1,
+                    "version": 0,
                     "quota": {"daily_minutes": 120},
                     "schedule": {"start_time": "07:00", "end_time": "21:30"},
                     "app_rules": {"blacklist": []},

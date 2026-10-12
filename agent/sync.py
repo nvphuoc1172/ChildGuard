@@ -60,7 +60,7 @@ class SyncWorker:
 
     def send_heartbeat(self) -> dict:
         policy = self.storage.get_policy()
-        policy_version = policy.get("version", 1)
+        policy_version = policy.get("version", 0)
         used_seconds = self.storage.get_screen_time_today()
         pending_events = self.storage.get_pending_events()
 
@@ -74,7 +74,7 @@ class SyncWorker:
         return res
 
     def fetch_and_apply_policy(self):
-        print("[Sync] Chính sách có thay đổi -> Đang lấy bản mới từ GET /policy...")
+        print("[Sync] Đang đồng bộ chính sách từ server GET /policy...")
         policy_data = self._http_request("/policy", method="GET")
         self.storage.save_policy(policy_data)
         print(f"[Sync] Đã cập nhật chính sách phiên bản v{policy_data.get('version')} thành công.")
@@ -152,8 +152,14 @@ class SyncWorker:
     def _run_ws_thread(self):
         asyncio.run(self._websocket_loop())
 
-    def run_heartbeat_loop(self, interval: int = 60):
+    def run_heartbeat_loop(self, interval: int = 30):
         self.running = True
+        # Luôn đồng bộ chính sách mới nhất ngay khi Agent khởi chạy
+        try:
+            self.fetch_and_apply_policy()
+        except Exception as e:
+            print(f"[Sync] Chưa đồng bộ được policy khi khởi động: {e}")
+
         # Khởi chạy luồng WebSocket
         ws_thread = threading.Thread(target=self._run_ws_thread, daemon=True)
         ws_thread.start()

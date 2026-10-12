@@ -30,7 +30,7 @@ router = APIRouter(tags=["dashboard"])
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "dashboard" / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-ONLINE_THRESHOLD_SECONDS = 90
+ONLINE_THRESHOLD_SECONDS = 180
 
 
 def _get_or_create_demo_parent(db: Session) -> models.Parent:
@@ -134,7 +134,8 @@ def dashboard_overview(
 
         used_minutes = round(used_seconds / 60, 1)
         percent = min(100, round((used_minutes / max(daily_quota, 1)) * 100)) if daily_quota > 0 else 0
-        is_online = (now - d.last_seen_at) <= timedelta(seconds=ONLINE_THRESHOLD_SECONDS)
+        is_ws_active = bool(manager.active_connections.get(d.id))
+        is_online = is_ws_active or ((now - d.last_seen_at) <= timedelta(seconds=ONLINE_THRESHOLD_SECONDS))
 
         children_data.append(
             {
@@ -533,7 +534,8 @@ def device_status_page(request: Request, db: Session = Depends(get_db)):
             .filter(models.Command.device_id == device.id, models.Command.delivered_at.is_(None))
             .count()
         )
-        is_online = (now - device.last_seen_at) <= timedelta(seconds=ONLINE_THRESHOLD_SECONDS)
+        is_ws_active = bool(manager.active_connections.get(device.id))
+        is_online = is_ws_active or ((now - device.last_seen_at) <= timedelta(seconds=ONLINE_THRESHOLD_SECONDS))
 
         rows.append(
             {
