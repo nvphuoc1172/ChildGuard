@@ -40,14 +40,19 @@ class SyncWorker:
         self.device_id = state_config["device_id"]
         self.access_token = state_config["access_token"]
         self.ca_cert_path = ca_cert_path
+        self.use_http = state_config.get("use_http", False)
         self.running = False
 
-    def _get_ssl_context(self) -> ssl.SSLContext:
-        ctx = ssl.create_default_context(cafile=self.ca_cert_path)
-        return ctx
+    def _get_ssl_context(self) -> ssl.SSLContext | None:
+        if self.use_http:
+            return None
+        if self.ca_cert_path and Path(self.ca_cert_path).exists():
+            return ssl.create_default_context(cafile=self.ca_cert_path)
+        return ssl._create_unverified_context()
 
     def _http_request(self, path: str, method: str = "GET", body: dict | None = None) -> dict:
-        url = f"https://{self.server}:{self.port}{path}"
+        scheme = "http" if self.use_http else "https"
+        url = f"{scheme}://{self.server}:{self.port}{path}"
         data_bytes = json.dumps(body).encode("utf-8") if body is not None else None
         headers = {"Authorization": f"Bearer {self.access_token}"}
         if data_bytes is not None:
@@ -134,7 +139,8 @@ class SyncWorker:
 
     async def _websocket_loop(self):
         """Vòng lặp WebSocket thời gian thực (<5s latency)."""
-        ws_url = f"wss://{self.server}:{self.port}/ws/{self.device_id}?token={self.access_token}"
+        ws_scheme = "ws" if self.use_http else "wss"
+        ws_url = f"{ws_scheme}://{self.server}:{self.port}/ws/{self.device_id}?token={self.access_token}"
         ssl_ctx = self._get_ssl_context()
 
         while self.running:
