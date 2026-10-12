@@ -354,9 +354,172 @@ ChildGuard/
 
 ---
 ## 10. Chi tiết Các Hạng mục Đã Xây dựng & Sửa đổi
-1. Phía Máy chủ OGK-Server (Debian / FastAPI)
 
-2. Phía Máy Trẻ Em OGK-Agent (Windows 10/11)
+Phần này ghi lại chi tiết các module chức năng đã xây dựng, tối ưu hóa và sửa đổi trong toàn bộ hệ thống, phân chia theo hai thành phần chính: **OGK-Server** và **OGK-Agent**.
+
+---
+
+### 10.1. Phía Máy chủ OGK-Server (Debian / FastAPI)
+
+#### 10.1.1. Cấu hình Kênh truyền Bảo mật & Sinh Chứng chỉ CA Nội bộ (mTLS & SAN Certificate)
+- **Hướng phát triển**:
+  - Triển khai FastAPI chạy trên nền Uvicorn với giao thức HTTPS/WSS tại cổng 8443.
+  - Áp dụng cơ chế Certificate Pinning với một CA nội bộ (`ogk-ca.crt`), không phụ thuộc vào CA thương mại công cộng.
+  - Sinh chứng chỉ máy chủ `ogk.crt` được ký bởi `ogk-ca.key` với trường Subject Alternative Name (SAN) chứa IP tĩnh hoặc domain của máy chủ trong mạng LAN.
+- **Các lỗi đã gặp**:
+  - **Lỗi xác thực SSL phía Client**: Khi Agent trên Windows gọi `POST /enroll`, gặp lỗi `[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1082)`. Nguyên nhân do chứng chỉ `ogk.crt` ban đầu thiếu trường `subjectAltName` chứa địa chỉ IP thực tế của máy chủ (`IP:192.168.204.100`), hoặc phía client thiếu tệp `ogk-ca.crt`.
+  - **Lỗi kết nối Timeout**: Client không kết nối được tới cổng 8443 do tường lửa `ufw` trên Debian chưa mở cổng hoặc Uvicorn chỉ bind trên `127.0.0.1`.
+- **Cách sửa**:
+  - Viết lại file cấu hình mở rộng `ogk.ext` bổ sung đầy đủ SAN: `subjectAltName=IP:192.168.204.100,DNS:ogk-server,DNS:localhost`. Ký lại chứng chỉ máy chủ bằng lệnh OpenSSL x509 chuẩn.
+  - Phân phối file công khai `ogk-ca.crt` sang máy client và hướng dẫn kiểm tra mã băm MD5 để xác minh tính toàn vẹn.
+  - Mở cổng tường lửa trên máy chủ: `sudo ufw allow 8443/tcp` và cấu hình Uvicorn lắng nghe trên mọi giao diện mạng: `--host 0.0.0.0 --port 8443`.
+
+---
+
+#### 10.1.2. Xác thực Ghép đôi Thiết bị & Quản lý Token (Enrollment & Token Lifecycle)
+- **Hướng phát triển**:
+  - API `POST /enroll`: Xác thực mã ghép đôi 8 ký tự (TTL 10 phút, bảng `enrollment_codes`).
+  - Tiếp nhận `device_fingerprint` (đã băm SHA256 từ `MachineGuid` + hostname phía Agent) và tạo bản ghi thiết bị trong bảng `devices`.
+  - Cấp cặp mã thông báo ngẫu nhiên mật mã học: `access_token` (truy cập ngắn hạn) và `refresh_token` (dài hạn). Server chỉ lưu bản băm SHA256 trong bảng `tokens`.
+  - Ghi nhận bắt buộc sự đồng ý (Consent Audit Log) vào bảng `audit_logs` cho mỗi lượt ghép đôi thành công.
+- **Các lỗi đã gặp**:
+  - **Lỗi từ chối kết nối WebSocket HTTP 403 (Policy Violation)**: Sau 15 phút hoạt động, khi Agent kết nối lại WebSocket `/ws/{device_id}`, Server ngắt kết nối với mã lỗi 403. Nguyên nhân do `ACCESS_TOKEN_TTL_MINUTES` mặc định chỉ có 15 phút, khi hết hạn thì hàm xác thực từ chối bắt tay WSS.
+  - **Lỗi mất token khi khởi động lại máy chủ**: Khi khởi động lại uvicorn mà đường dẫn database bị trỏ sang file mới, làm mất các token đã cấp trước đó.
+- **Cách sửa**:
+  - Điều chỉnh cấu hình TTL trong `server/app/security.py` cho môi trường phát triển (hoặc triển khai cơ chế làm mới token tự động).
+  - Chuẩn hóa đường dẫn lưu trữ database SQLite tại `/opt/childguard/data/ogk.db`, đảm bảo tính bền vững của dữ liệu tài khoản và token.
+
+---
+
+#### 10.1.3. Nhịp tim Dự phòng, Cập nhật Chính sách & Lệnh Khẩn cấp (Heartbeat, Policy Versioning & Commands)
+- **Hướng phát triển**:
+  - API `POST /heartbeat`: Tiếp nhận thông số từ Agent mỗi 60 giây, cập nhật `last_seen_at`. So sánh phiên bản chính sách mới nhất của trẻ với `policy_version` do Agent gửi lên; nếu khác nhau trả về `policy_changed: true`. Trả về danh sách lệnh khẩn cấp đang chờ (`pending_commands`).
+  - API `GET /policy`: Cho phép Agent tải nội dung chi tiết của phiên bản chính sách mới nhất.
+  - Kênh điều khiển WebSocket `WS /ws/{device_id}`: Quản lý qua `ConnectionManager`, cho phép phụ huynh phát lệnh khóa/mở máy tức thì với độ trễ < 5 giây.
+- **Các lỗi đã gặp**:
+  - Server trả về `policy_changed: false` dù phụ huynh đã cập nhật phiên bản chính sách mới trên Dashboard nếu Agent gửi lên version cũ không khớp child_id.
+- **Cách sửa**:
+  - Chuẩn hóa hàm truy vấn `_latest_policy(db, child_id)` trong `server/app/routers/heartbeat.py` sắp xếp theo `version.desc()`, đảm bảo luôn lấy đúng phiên bản chính sách mới nhất của trẻ tương ứng với thiết bị gửi yêu cầu.
+
+---
+
+#### 10.1.4. Quản lý Chính sách trên Web Dashboard & Chuẩn hóa Dữ liệu (Parent Policy Management)
+- **Hướng phát triển**:
+  - Giao diện Web Dashboard (Jinja2 Templates) cho phép phụ huynh trực tiếp cấu hình: hạn mức ngày (`daily_minutes`), khung giờ biểu (`start_time`, `end_time`), danh sách đen ứng dụng (`blocked_apps`) và danh sách đen website (`blocked_domains`).
+  - Mỗi lần lưu sẽ tự động sinh phiên bản chính sách mới (`version = version + 1`) và ghi nhật ký kiểm toán `audit_logs`.
+- **Các lỗi đã gặp**:
+  - **Lỗi dữ liệu tên miền không chuẩn hóa**: Khi phụ huynh nhập URL trang web có kèm giao thức (ví dụ: `https://www.facebook.com`, `http://youtube.com/watch`) hoặc dấu gạch chéo `/`, router lưu nguyên chuỗi thô vào cột `domain_rules_json`. Hậu quả là phía Agent không thể so khớp với tên miền DNS thực tế (vốn chỉ là `facebook.com`), làm tính năng chặn web bị vô hiệu hóa.
+- **Cách sửa**:
+  - Bổ sung logic tự động chuẩn hóa chuỗi tên miền trong hàm `save_policy_page` tại `server/app/routers/dashboard.py`:
+    ```python
+    domain_list = []
+    for line in blocked_domains.splitlines():
+        d = line.strip().lower()
+        if not d: continue
+        if d.startswith("http://"): d = d[7:]
+        elif d.startswith("https://"): d = d[8:]
+        d = d.split("/")[0].split(":")[0].strip()
+        if d and d not in domain_list:
+            domain_list.append(d)
+    ```
+    Giúp tự động làm sạch URL thành tên miền gốc chuẩn trước khi lưu vào cơ sở dữ liệu.
+
+---
+
+### 10.2. Phía Máy Trẻ Em OGK-Agent (Windows 10/11)
+
+#### 10.2.1. Ghép đôi Thiết bị An toàn (Agent Enrollment Script)
+- **Hướng phát triển**:
+  - Script `agent/enroll.py` thực hiện đọc `MachineGuid` từ registry `HKLM\SOFTWARE\Microsoft\Cryptography`, băm SHA256 thành `device_fingerprint` duy nhất.
+  - Khởi tạo ngữ cảnh SSL an toàn với file CA nội bộ `certs/ogk-ca.crt`.
+  - Gửi yêu cầu ghép đôi tới máy chủ và lưu kết quả (`device_id`, `access_token`, `refresh_token`, cấu hình máy chủ) vào tệp `agent_state/device_token.json`.
+- **Các lỗi đã gặp**:
+  - Lỗi không tìm thấy file CA hoặc file chứng chỉ bị sai lệch mã băm so với Server dẫn đến `[SSL: CERTIFICATE_VERIFY_FAILED]`.
+  - Lỗi đường dẫn tương đối khi chạy script ở các thư mục khác nhau.
+- **Cách sửa**:
+  - Thêm cơ chế chuẩn hóa đường dẫn tệp chứng chỉ, hỗ trợ kiểm tra sự tồn tại của file trước khi khởi tạo ngữ cảnh SSL và hướng dẫn người dùng sử dụng đường dẫn tuyệt đối hoặc `Resolve-Path`.
+
+---
+
+#### 10.2.2. Lưu trữ Cục bộ SQLite & Đồng bộ Lô Sự kiện (Agent Storage & Batch Events)
+- **Hướng phát triển**:
+  - Module `agent/storage.py` quản lý database SQLite cục bộ `agent_state/agent.db`.
+  - Bảng `event_queue`: Hàng đợi lưu trữ sự kiện ngoại tuyến (`app_blocked`, `web_blocked`, `screen_time`). Mỗi sự kiện có khóa `idempotency_key = ev_<uuid>` để đảm bảo không bị đếm trùng khi gửi lại.
+  - Bảng `agent_state`: Lưu trữ số giây dùng máy hôm nay (`quota_used_seconds`), cờ khóa (`is_locked`), thời điểm liên lạc server cuối cùng (`last_server_contact_ts`).
+  - Hàm `mark_events_sent`: Đánh dấu `sent = 1` và dọn dẹp các sự kiện đã được Server xác nhận.
+- **Các lỗi đã gặp**:
+  - **Lỗi SQLite bindings mismatch**: Ghi nhận lỗi `[Sync] Chưa gửi được batch events: Incorrect number of bindings supplied. The current statement uses 11, and there are 0 supplied`. Nguyên nhân do trong câu lệnh `DELETE FROM event_queue WHERE sent = 1 AND id IN (...)` đã quên truyền danh sách đối số `event_ids`.
+- **Cách sửa**:
+  - Sửa lại hàm `mark_events_sent` trong `agent/storage.py`: truyền bổ sung danh sách `event_ids` vào đối số thứ hai của hàm `conn.execute()`.
+
+---
+
+#### 10.2.3. Bộ lọc Website & Chặn Tên miền (DNS Proxy & Windows Hosts Blocker)
+- **Hướng phát triển**:
+  - Ngăn chặn trẻ truy cập các website nằm trong danh sách đen của cha mẹ trên mọi trình duyệt.
+  - Ban đầu thiết kế bằng DNS Proxy UDP lắng nghe tại `127.0.0.1:53` phân tích gói tin DNS truy vấn theo chuẩn RFC 1035.
+- **Các lỗi đã gặp**:
+  - **Lệch cấu trúc bản ghi DNS (Record Type Mismatch)**: Trình duyệt Edge/Chrome gửi đồng thời câu hỏi IPv4 (Type 1 - A), IPv6 (Type 28 - AAAA) và HTTPS SVCB (Type 65). Code cũ trả về gói phản hồi cứng là Type A (`0.0.0.0`) cho mọi loại câu hỏi, khiến Windows đánh giá gói tin phản hồi bị lỗi định dạng (corrupt).
+  - **Multi-Homed DNS Fallback của Windows**: Khi câu trả lời từ `127.0.0.1:53` bị coi là lỗi, Windows DNS Client lập tức fallback gửi truy vấn sang DNS phụ của card mạng (gateway VirtualBox hoặc router), nhận về IP thật và mở web bình thường.
+  - **Trình duyệt bật DoH (DNS-over-HTTPS)**: Edge/Chrome tự ý gửi truy vấn HTTPS mã hóa ra ngoài, bỏ qua DNS cục bộ của máy tính.
+- **Cách sửa & Cải tiến Kiến trúc 2 lớp**:
+  1. **Lớp 1 - Windows Hosts Blocker (Chặn cấp hệ điều hành không thể bypass)**: Xây dựng class `HostsBlocker` trong `agent/dns_proxy.py`. Tự động đồng bộ danh sách cấm trực tiếp vào tệp hệ thống `C:\Windows\System32\drivers\etc\hosts` cho cả IPv4 (`0.0.0.0`) và IPv6 (`::`), mở rộng cho cả `www.` và tên miền gốc. File hosts có độ ưu tiên cao nhất trong hệ điều hành Windows, chặn đứng mọi trình duyệt mà không cần can thiệp card mạng thủ công. Khi Agent dừng, tự động khôi phục file hosts về nguyên trạng.
+  2. **Lớp 2 - DNS Proxy chuẩn RFC 1035**: Viết lại hàm `build_blocked_response`:
+     - Nếu truy vấn Type 1 (A) $\rightarrow$ Trả về IPv4 `0.0.0.0`.
+     - Nếu truy vấn Type 28 (AAAA) $\rightarrow$ Trả về IPv6 `::`.
+     - Nếu truy vấn Type 65 (HTTPS) hoặc loại khác $\rightarrow$ Trả về mã lỗi `NXDOMAIN` (RCODE = 3).
+  3. **Hàm `normalize_domain`**: Tự động bóc tách và làm sạch mọi tiền tố `http://`, `https://`, số cổng và đường dẫn. Tự động gọi `ipconfig /flushdns` sau khi cập nhật.
+
+---
+
+#### 10.2.4. Đếm Thời gian Sử dụng & Khóa Màn hình (Policy Enforcer & Screen-time Counter)
+- **Hướng phát triển**:
+  - Module `agent/enforcer.py` chạy vòng lặp mỗi 2 giây:
+    - Quét danh sách tiến trình (`psutil`), tự động ngắt ứng dụng bị cấm và ghi event `app_blocked`.
+    - Đếm dồn thời gian sử dụng màn hình theo thời gian thực.
+    - So sánh với hạn mức ngày (`daily_minutes`) và khung giờ cho phép (`schedule`).
+    - Thực thi khóa màn hình bằng Win32 API `ctypes.windll.user32.LockWorkStation()`.
+- **Các lỗi đã gặp**:
+  - **Thời gian sử dụng bị đóng băng (kẹt vĩnh viễn ở 0.4 phút)**: Biến `is_locked` bị lưu thành `True` trong database SQLite sau một lần thử nghiệm khóa hoặc quá giờ. Trong code cũ có điều kiện `if not is_locked and elapsed > 0: add_screen_time()`. Vì `is_locked == True`, bộ đếm không bao giờ cộng thêm giây nào vào thời gian sử dụng nữa. Đồng thời code không có cơ chế tự mở khóa khi trẻ đăng nhập lại hoặc khi phụ huynh tăng giờ.
+  - **Đếm giờ sai khi màn hình đang khóa**: Bộ đếm vẫn trừ giờ khi máy tính đang ở màn hình khóa Lock Screen.
+- **Cách sửa**:
+  1. **Tự động đánh giá và giải phóng trạng thái khóa**: Mỗi chu kỳ 2 giây, Enforcer tính toán lại điều kiện: nếu chưa vượt hạn mức ngày, đang trong khung giờ cho phép và không bị phụ huynh phát lệnh khóa tay $\rightarrow$ Enforcer tự động xóa cờ khóa `self.storage.set_lock_status(False)` để thời gian tiếp tục được đếm dồn.
+  2. **Tích hợp Windows API kiểm tra phiên người dùng**: Bổ sung hàm `is_windows_locked()` sử dụng API `user32.OpenInputDesktop(0, False, 0x0100)`. Khi máy tính ở màn hình khóa, bộ đếm tạm dừng để không trừ giờ oan của trẻ; khi trẻ đăng nhập vào Desktop, bộ đếm hoạt động trở lại bình thường.
+  3. **Tự động mở khóa khi lưu Policy mới**: Trong `storage.py`, khi hàm `save_policy` nhận hạn mức mới lớn hơn thời gian đã sử dụng, hệ thống tự động cập nhật `is_locked = 0`.
+
+---
+
+#### 10.2.5. Giao diện Khay Hệ thống & Minh bạch cho Trẻ (System Tray UI & Transparency Window)
+- **Hướng phát triển**:
+  - Module `agent/tray/tray_app.py` chạy trong phiên người dùng:
+    - Hiển thị biểu tượng khiên bảo vệ `🛡️` ở khay hệ thống qua thư viện `pystray`.
+    - Menu xem thời gian còn lại.
+    - Cửa sổ minh bạch hiển thị chi tiết chính sách cha mẹ đã đặt (hạn mức, giờ giấc, app cấm, web cấm).
+    - Hộp thoại xin thêm giờ (+15, +30, +60 phút) gửi qua IPC lên Server để phụ huynh duyệt.
+- **Các lỗi đã gặp**:
+  - **Menu và Tooltip hiển thị tĩnh không đếm ngược**: Do `pystray` trên Windows không tự động vẽ lại nội dung MenuItem nếu không có lệnh cập nhật menu định kỳ.
+  - **Cửa sổ minh bạch không tự nhảy số**: Dữ liệu chỉ nạp 1 lần lúc mở cửa sổ.
+  - **Trùng lặp nút bấm**: Trong mã nguồn cũ của hộp thoại xin thêm giờ bị khai báo 2 lần widget `tk.Button`.
+- **Cách sửa**:
+  - Bổ sung luồng daemon chạy ngầm mỗi 2 giây trong `tray_app.py`: tự động làm mới `self.icon.title` (hiển thị `ChildGuard — Còn XXp / YYp`) và gọi `self.icon.update_menu()`.
+  - Cửa sổ minh bạch Tkinter sử dụng `StringVar` và hàm gọi lặp `root.after(2000, _update_info)` để đếm ngược thời gian thực trực tiếp trước mắt trẻ.
+  - Xóa bỏ nút bấm bị khai báo trùng lặp.
+
+---
+
+#### 10.2.6. Đồng bộ Lệnh Khẩn cấp Thời gian thực & Vòng lặp Nhịp tim (SyncWorker & WebSocket Client)
+- **Hướng phát triển**:
+  - Module `agent/sync.py`:
+    - Duy trì kết nối WebSocket `wss://<server>:8443/ws/<device_id>` nhận lệnh tức thì (< 5s).
+    - Vòng lặp Heartbeat 60s gửi trạng thái và nhận lệnh khẩn dự phòng.
+    - Khi nhận lệnh `lock`/`unlock`/`grant_minutes`, gọi Enforcer thực thi và phản hồi ACK ngay lập tức.
+- **Các lỗi đã gặp**:
+  - Khi chính sách thay đổi trên Server, Agent nhận được `policy_changed=True` và gọi `fetch_and_apply_policy()`, nhưng danh sách cấm mới không được chuyển tiếp sang DNS Proxy và Hosts Blocker, khiến việc chặn trang web mới chỉ có hiệu lực sau khi tắt và bật lại Agent.
+- **Cách sửa**:
+  - Truyền tham chiếu `dns_proxy` vào khởi tạo của `SyncWorker`. Khi `fetch_and_apply_policy()` tải xong chính sách mới từ server, tự động kích hoạt `self.dns_proxy.sync_policy_rules(policy_data)` để cập nhật file hosts và bộ lọc DNS ngay lập tức mà không cần khởi động lại tiến trình.
+
+---
+
 
 
 ## 11. Giả định đã chọn (nêu rõ để bạn duyệt trước khi code)
