@@ -151,6 +151,35 @@ def login(
         parent_name=parent.full_name or "Phụ huynh",
     )
 
+@router.post("/auth/refresh")
+def refresh_device_token(request: Request, db: Session = Depends(get_db)):
+    """Cấp lại access_token ngắn hạn cho Agent bằng refresh_token."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing_refresh_token")
+    
+    refresh_token = auth_header.removeprefix("Bearer ").strip()
+    token_hash = security.hash_token(refresh_token)
+    
+    # Tìm token trong database
+    token_record = db.query(models.Token).filter(
+        models.Token.refresh_token_hash == token_hash,
+        models.Token.revoked == False
+    ).first()
+
+    if not token_record:
+        raise HTTPException(status_code=401, detail="invalid_or_revoked_refresh_token")
+
+    # Sinh access_token mới (TTL 15 phút)
+    new_access_token = security.create_device_access_token(token_record.device_id)
+    token_record.access_token_hash = security.hash_token(new_access_token)
+    # Cập nhật thời gian hết hạn mới cho access_token trong database nếu bảng Token có trường expires_at
+    # token_record.access_expires_at = datetime.utcnow() + timedelta(minutes=15)
+    
+    db.commit()
+
+    return {"access_token": new_access_token, "token_type": "bearer"}
+
 
 @router.post("/auth/logout")
 def logout(response: Response):

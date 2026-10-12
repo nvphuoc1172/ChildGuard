@@ -220,6 +220,14 @@ class TrayApp:
 
             def _submit():
                 mins = minutes_var.get()
+
+                if mins == 0:  # Trẻ chọn ô "Khác"
+                    try:
+                        mins = int(custom_min_entry.get().strip())
+                    except ValueError:
+                        messagebox.showwarning("Lỗi", "Vui lòng nhập số phút hợp lệ!")
+                        return
+                    
                 reason = reason_entry.get().strip()
                 ok = self.send_request(mins, reason)
                 if ok:

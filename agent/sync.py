@@ -66,10 +66,12 @@ class SyncWorker:
             with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
+            # Nếu gặp HTTP 401/403 và chưa retry, tự động Refresh Token và thử lại 1 lần duy nhất
             if e.code in (401, 403):
+                if self._refresh_access_token():
+                    return self._http_request(path, method, body, is_retry=True)
                 print(f"[Sync] CẢNH BÁO: Token bị từ chối (HTTP {e.code}). Có thể Server đã bị reset dữ liệu.")
-                # Tạm thời vô hiệu hóa vòng lặp để tránh spam log, chờ cấp token mới
-                self.running = False 
+                
             raise e
 
     def send_heartbeat(self) -> dict:
@@ -137,6 +139,50 @@ class SyncWorker:
         except Exception as e:
             print(f"[Sync] Gửi ACK thất bại: {e}")
 
+    def _refresh_access_token(self) -> bool:
+        """Đọc refresh_token từ cấu hình, gọi API để lấy access_token mới và ghi đè file."""
+        print("[Sync] ⚠️ Access Token hết hạn, đang tự động làm mới (Refresh Token)...")
+        config_path = Path(__file__).resolve().parent / "agent_state" / "device_token.json"
+        
+        try:
+            if not config_path.exists():
+                return False
+                
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            
+            refresh_token = config.get("refresh_token")
+            if not refresh_token:
+                print("[Sync] Lỗi: Không tìm thấy refresh_token trong cấu hình.")
+                return False
+
+            url = f"https://{self.server}:{self.port}/auth/refresh"
+            headers = {
+                "Authorization": f"Bearer {refresh_token}",
+                "Content-Type": "application/json"
+            }
+            req = urllib.request.Request(url, headers=headers, method="POST")
+            ctx = self._get_ssl_context()
+            
+            with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+                res_data = json.loads(resp.read().decode("utf-8"))
+                new_access = res_data.get("access_token")
+                
+                if new_access:
+                    self.access_token = new_access
+                    config["access_token"] = new_access
+                    
+                    # Cập nhật mã mới xuống file ổ cứng
+                    with open(config_path, "w", encoding="utf-8") as fw:
+                        json.dump(config, fw, indent=2)
+                        
+                    print("[Sync] ✓ Đã làm mới Access Token thành công. Khôi phục kết nối.")
+                    return True
+        except Exception as e:
+            print(f"[Sync] ❌ Cấp lại token thất bại: {e}")
+            
+        return False
+    
     async def _websocket_loop(self):
         """Vòng lặp WebSocket thời gian thực (<5s latency)."""
         ws_scheme = "ws" if self.use_http else "wss"
