@@ -6,7 +6,7 @@ GET /auth/me: Lấy thông tin tài khoản phụ huynh hiện tại.
 """
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app import models, schemas, security
