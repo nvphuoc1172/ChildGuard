@@ -163,7 +163,29 @@ Response:
 - Khi có mạng trở lại: gửi các event theo lô (`POST /events/batch`), mỗi event kèm `idempotency_key` để server dedupe an toàn dù gửi lại nhiều lần.
 - Batch có giới hạn kích thước (vd 200 event/lần) để tránh một lần đồng bộ quá nặng sau khi mất mạng lâu ngày.
 
-### 5.5. Chính sách hết hạn khi mất kết nối dài ngày — quyết định thiết kế
+### 5.5. Dashboard Phụ huynh
+
+- Đã hoàn thiện Jinja2 = HTMLX
+- Chạy server: 
+```bash
+source /opt/childguard/.venv/bin/activate
+/opt/childguard/app/server
+uvicorn app.main:app --host 0.0.0.0 --port 8443 \
+  --ssl-keyfile /opt/childguard/certs/ogk.key \
+  --ssl-certfile /opt/childguard/certs/ogk.crt
+
+```
+- Nếu bị lỗi về database, xóa file db và server tự tạo lại:
+```bash
+rm -f /opt/childguard/data/ogk.db*
+```
+Dashboard: 
+http://<SERVER_IP>:8443/dashboard
+Đăng nhập phụ huynh demo: demo@ogk.local (mật khẩu bất kỳ)
+- 
+
+### 5.6. Chính sách hết hạn khi mất kết nối dài ngày — quyết định thiết kế
+
 
 **Quyết định: FAIL-CLOSED có kiểm soát (không fail-open tuyệt đối), theo 2 giai đoạn.**
 
@@ -331,8 +353,13 @@ ChildGuard/
 Ở bước tiếp theo (khi bạn sẵn sàng cho phần thực thi), mình sẽ hướng dẫn theo đúng thứ tự: (1) chuẩn bị VM Debian + cài Python/dependencies cho server, (2) chuẩn bị máy Windows cho agent (Python, pywin32, quyền Service), (3) viết code từng module theo thứ tự server → agent service → tray UI → dashboard, (4) test tích hợp giữa 2 máy qua LAN, (5) đóng gói cài đặt (installer/script) và tài liệu.
 
 ---
+## 10. Chi tiết Các Hạng mục Đã Xây dựng & Sửa đổi
+1. Phía Máy chủ OGK-Server (Debian / FastAPI)
 
-## 10. Giả định đã chọn (nêu rõ để bạn duyệt trước khi code)
+2. Phía Máy Trẻ Em OGK-Agent (Windows 10/11)
+
+
+## 11. Giả định đã chọn (nêu rõ để bạn duyệt trước khi code)
 
 1. Dashboard dùng **Jinja2 + HTMX** (xem lý do mục 2).
 2. Fail-closed 2 giai đoạn (N₁=3 ngày enforce cứng, N₂=14 ngày degraded safe-mode) — xem mục 5.5, số ngày có thể điều chỉnh theo yêu cầu đề bài nếu giáo viên quy định khác.
