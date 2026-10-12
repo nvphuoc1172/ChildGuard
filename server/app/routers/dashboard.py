@@ -493,6 +493,8 @@ def enroll_tab_page(
     latest_active_code = None
 
     for c in raw_codes:
+        ch = db.get(models.Child, c.child_id)
+        child_name = ch.display_name if ch else "Bé yêu"
         is_used = c.used_at is not None
         is_expired = c.expires_at < now
         rem_sec = max(0, int((c.expires_at - now).total_seconds()))
@@ -503,6 +505,7 @@ def enroll_tab_page(
 
         item = {
             "code": c.code,
+            "child_name": child_name,
             "created_at": c.created_at.strftime("%H:%M:%S %d/%m/%Y"),
             "expires_at": c.expires_at.strftime("%H:%M:%S %d/%m/%Y"),
             "expires_at_iso": c.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -549,6 +552,9 @@ def get_enrollment_code_status(
     if not c or c.parent_id != parent.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="code_not_found")
 
+    ch = db.get(models.Child, c.child_id)
+    child_name = ch.display_name if ch else "Bé yêu"
+
     now = datetime.utcnow()
     is_used = c.used_at is not None
     is_expired = c.expires_at < now
@@ -560,6 +566,7 @@ def get_enrollment_code_status(
 
     return {
         "code": c.code,
+        "child_name": child_name,
         "is_used": is_used,
         "is_expired": is_expired,
         "rem_sec": rem_sec if not is_used and not is_expired else 0,
@@ -573,16 +580,22 @@ def get_enrollment_code_status(
 
 @router.post("/dashboard/enroll/generate")
 def generate_enrollment_code_quick(
+    child_name: str = Form(default="Minh An"),
     db: Session = Depends(get_db),
     parent: models.Parent | None = Depends(get_optional_parent),
 ):
-    """Sinh mã ghép đôi tức thì cho trẻ bất kỳ mà không cần điền form."""
+    """Sinh mã ghép đôi cho trẻ với tên do phụ huynh nhập."""
     if not parent:
         return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
 
-    child = db.query(models.Child).filter(models.Child.parent_id == parent.id).first()
+    name_clean = child_name.strip() if child_name and child_name.strip() else "Minh An"
+    child = (
+        db.query(models.Child)
+        .filter(models.Child.parent_id == parent.id, models.Child.display_name == name_clean)
+        .first()
+    )
     if not child:
-        child = models.Child(parent_id=parent.id, display_name="Máy của trẻ")
+        child = models.Child(parent_id=parent.id, display_name=name_clean)
         db.add(child)
         db.flush()
 
@@ -601,7 +614,7 @@ def generate_enrollment_code_quick(
         actor_type="parent",
         actor_id=parent.id,
         action="quick_generate_enrollment_code",
-        detail_json=json.dumps({"code": code}),
+        detail_json=json.dumps({"code": code, "child_id": child.id, "child_name": child.display_name}),
         created_at=now,
     )
     db.add(audit)

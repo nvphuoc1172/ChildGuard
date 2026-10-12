@@ -326,3 +326,30 @@ def test_enroll_status_api_unauthorized_and_invalid(client):
     client.post("/dashboard/quick-demo-login")
     resp_notfound = client.get("/dashboard/enroll/status?code=INVALIDC")
     assert resp_notfound.status_code == 404
+
+
+def test_enroll_with_custom_child_name_and_command_display(client):
+    # Đăng nhập bằng tài khoản demo
+    client.post("/dashboard/quick-demo-login")
+
+    # Sinh mã với tên bé cụ thể
+    gen_resp = client.post(
+        "/dashboard/enroll/generate",
+        data={"child_name": "Bé Bắp"},
+        follow_redirects=False,
+    )
+    assert gen_resp.status_code == 302
+    location = gen_resp.headers["location"]
+    assert "/dashboard/enroll?code=" in location
+
+    code = location.split("code=")[1]
+
+    # Kiểm tra giao diện hiển thị tên bé và nút sao chép lệnh
+    view_resp = client.get(f"/dashboard/enroll?code={code}")
+    assert view_resp.status_code == 200
+    assert "Bé Bắp" in view_resp.text
+    assert code in view_resp.text
+    assert "Sao chép lệnh" in view_resp.text
+    assert "python agent/enroll.py" in view_resp.text
+    assert "Tên của bé:" in view_resp.text
+

@@ -10,17 +10,23 @@
   </div>
 </div>
 
-<!-- Khối tạo mã nhanh -->
+<!-- Khối tạo mã nhanh kèm ô nhập tên bé -->
 <div class="card" style="margin-bottom: 24px; background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%); border: 1px solid var(--border-color);">
-  <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
-    <div>
+  <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 20px;">
+    <div style="max-width: 520px;">
       <h2 style="font-size: 18px; font-weight: 700; color: var(--text-main);">Tạo mã ghép đôi mới cho máy trẻ</h2>
       <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
-        Chỉ cần bấm nút bên cạnh, hệ thống sẽ sinh ngay mã 8 ký tự có hạn trong 10 phút. Mã này dùng được cho bất kỳ máy tính nào của bé.
+        Nhập tên của bé (ví dụ: Minh An, Bo, Bắp...) để hệ thống ghi nhớ và tự động áp dụng hồ sơ bảo vệ cho đúng thiết bị của con. Mã có hiệu lực trong 10 phút.
       </p>
     </div>
-    <form action="/dashboard/enroll/generate" method="POST">
-      <button type="submit" class="btn btn-primary" style="padding: 12px 24px; font-weight: 700; font-size: 15px; box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4);">
+    <form action="/dashboard/enroll/generate" method="POST" style="display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; background: rgba(15, 23, 42, 0.6); padding: 14px 18px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+      <div>
+        <label for="childNameInput" style="display: block; font-size: 12px; font-weight: 600; color: #94a3b8; margin-bottom: 6px;">
+          👶 Tên của bé:
+        </label>
+        <input type="text" id="childNameInput" name="child_name" placeholder="Ví dụ: Minh An" value="{{ latest_code.child_name if latest_code else 'Minh An' }}" required style="background: var(--bg-surface); border: 1px solid var(--border-color); color: var(--text-main); padding: 10px 14px; border-radius: var(--radius-sm); font-size: 14px; min-width: 180px; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='var(--border-color)'">
+      </div>
+      <button type="submit" class="btn btn-primary" style="padding: 10px 20px; font-weight: 700; font-size: 14px; box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4); display: flex; align-items: center; gap: 6px; height: 42px;">
         ⚡ Sinh mã ghép đôi mới
       </button>
     </form>
@@ -32,7 +38,8 @@
       <div>
         <div id="latestCodeHeader" style="font-size: 13px; font-weight: 600; text-transform: uppercase; color: #60a5fa; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
           <span id="latestCodeIcon">🟢</span>
-          <span id="latestCodeStatusTitle">Mã đang hoạt động</span>
+          <span id="latestCodeStatusTitle">Mã đang hoạt động cho bé:</span>
+          <span id="latestCodeChildName" style="color: #38bdf8; font-weight: 800; font-size: 15px; text-transform: none;">{{ latest_code.child_name }}</span>
           <span style="color: var(--text-muted); font-weight: normal; text-transform: none;">(Hiệu lực còn:</span>
           <span id="latestCountdownBadge" style="font-family: monospace; font-size: 15px; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.15); padding: 2px 10px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.3); display: inline-flex; align-items: center; gap: 4px;">
             ⏱️ <span id="latestCountdownValue">{{ "%02d:%02d"|format(latest_code.rem_sec // 60, latest_code.rem_sec % 60) }}</span>
@@ -57,18 +64,29 @@
         <div id="liveStatusAlert" style="margin-top: 12px; display: none; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;"></div>
       </div>
       <div style="font-size: 12px; color: var(--text-soft); text-align: right;">
+        Bé: <strong style="color: #60a5fa; font-size: 13px;">{{ latest_code.child_name }}</strong><br>
         Tạo lúc: <strong>{{ latest_code.created_at }}</strong><br>
         Hết hạn lúc: <strong id="latestCodeExpiresAt">{{ latest_code.expires_at }}</strong>
       </div>
     </div>
 
-    <div style="margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--border-color); font-size: 13px; color: var(--text-muted);">
-      💻 <strong>Lệnh nhập mã trên máy của bé (chạy trên terminal hoặc PowerShell):</strong>
-      <div style="margin-top: 8px; background: #090d16; padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-family: monospace; color: #6ee7b7; word-break: break-all;">
-        python agent/enroll.py --server 127.0.0.1 --port 8443 --ca-cert certs/ogk-ca.crt --code {{ latest_code.code }}
+    <!-- KHỐI LỆNH GHÉP ĐÔI CHO BÉ VỚI NÚT SAO CHÉP LỆNH -->
+    <div style="margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--border-color);">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
+        <div style="font-size: 13px; color: var(--text-muted); font-weight: 600;">
+          💻 Lệnh nhập mã trên máy của bé <span style="color: #60a5fa; font-weight: 700;">{{ latest_code.child_name }}</span> (Terminal / PowerShell):
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" onclick="copyCommand()" style="font-size: 12px; padding: 6px 14px; display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);">
+          📋 Sao chép lệnh
+        </button>
       </div>
-      <div style="font-size: 11px; color: var(--text-soft); margin-top: 6px;">
-        *Nếu bạn chạy kiểm thử cục bộ bằng HTTP cổng 8000: thêm <code>--http --port 8000</code> vào cuối lệnh.
+      <div id="enrollCommandText" style="background: #090d16; padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-family: monospace; color: #6ee7b7; word-break: break-all; font-size: 13px; user-select: all;">python agent/enroll.py --server SERVER_IP --port 8443 --ca-cert certs/ogk-ca.crt --code {{ latest_code.code }}</div>
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; font-size: 11px; color: var(--text-soft);">
+        <p>*Thay thế <code>SERVER_IP</code> bằng địa chỉ Server của phụ huynh. (Thử nghiệm)</p>
+        <p>*Nếu đang chạy kiểm thử cục bộ bằng HTTP cổng 8000: thêm <code>--http --port 8000</code> vào cuối lệnh.</p>
+        <button type="button" onclick="copyCommandHttp()" style="color: #94a3b8; font-size: 11px; text-decoration: underline; background: none; border: none; cursor: pointer; padding: 0;">
+          📋 Sao chép lệnh chế độ HTTP
+        </button>
       </div>
     </div>
   </div>
@@ -88,6 +106,7 @@
       <thead>
         <tr>
           <th>Mã ghép đôi</th>
+          <th>Tên bé</th>
           <th>Thời gian tạo</th>
           <th>Thời hạn (10 phút)</th>
           <th>Trạng thái</th>
@@ -101,6 +120,9 @@
             <code class="code-val-{{ item.code }}" style="font-weight: 700; font-size: 14px; color: {% if not item.is_used and not item.is_expired %}#38bdf8{% else %}var(--text-muted){% endif %};">
               {{ item.code }}
             </code>
+          </td>
+          <td style="font-size: 13px; font-weight: 600; color: var(--text-main);">
+            {{ item.child_name }}
           </td>
           <td style="font-size: 13px; color: var(--text-muted);">{{ item.created_at }}</td>
           <td style="font-size: 13px; color: var(--text-muted);">{{ item.expires_at }}</td>
@@ -116,13 +138,18 @@
             </span>
           </td>
           <td id="action-{{ item.code }}">
-            {% if not item.is_used and not item.is_expired %}
-              <button type="button" class="btn btn-sm btn-outline copy-btn-{{ item.code }}" onclick="copyCode('{{ item.code }}')" style="padding: 3px 8px; font-size: 11px;">
-                📋 Sao chép
-              </button>
-            {% else %}
-              <span style="color: var(--text-soft); font-size: 12px;">—</span>
-            {% endif %}
+            <div style="display: flex; gap: 6px; align-items: center;">
+              {% if not item.is_used and not item.is_expired %}
+                <button type="button" class="btn btn-sm btn-outline copy-btn-{{ item.code }}" onclick="copyCode('{{ item.code }}')" style="padding: 3px 8px; font-size: 11px;">
+                  📋 Mã
+                </button>
+                <button type="button" class="btn btn-sm btn-outline" onclick="copyCustomCommand('{{ item.code }}')" style="padding: 3px 8px; font-size: 11px;" title="Sao chép toàn bộ lệnh ghép đôi cho mã này">
+                  💻 Lệnh
+                </button>
+              {% else %}
+                <span style="color: var(--text-soft); font-size: 12px;">—</span>
+              {% endif %}
+            </div>
           </td>
         </tr>
         {% endfor %}
@@ -131,7 +158,7 @@
   </div>
   {% else %}
   <div style="text-align: center; padding: 30px; color: var(--text-soft); font-size: 14px;">
-    Chưa có mã ghép đôi nào được tạo. Hãy bấm nút <strong>"Sinh mã ghép đôi mới"</strong> ở trên để bắt đầu kết nối máy của bé.
+    Chưa có mã ghép đôi nào được tạo. Hãy nhập tên bé và bấm nút <strong>"Sinh mã ghép đôi mới"</strong> ở trên để bắt đầu kết nối máy của bé.
   </div>
   {% endif %}
 </div>
@@ -146,6 +173,49 @@
       });
     } else {
       prompt("Sao chép mã ghép đôi này:", code);
+    }
+  }
+
+  function copyCommand() {
+    const cmdElem = document.getElementById("enrollCommandText");
+    if (!cmdElem) return;
+    const cmd = cmdElem.textContent.trim();
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(cmd).then(() => {
+        showCopyFeedback("Đã sao chép lệnh ghép đôi vào clipboard!");
+      }).catch(() => {
+        prompt("Sao chép lệnh này để chạy trên máy của bé:", cmd);
+      });
+    } else {
+      prompt("Sao chép lệnh này để chạy trên máy của bé:", cmd);
+    }
+  }
+
+  function copyCommandHttp() {
+    const activeCode = "{{ latest_code.code if latest_code else '' }}";
+    if (!activeCode) return;
+    const cmd = "python agent/enroll.py --server 127.0.0.1 --port 8000 --http --code " + activeCode;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(cmd).then(() => {
+        showCopyFeedback("Đã sao chép lệnh HTTP dev vào clipboard!");
+      }).catch(() => {
+        prompt("Sao chép lệnh này:", cmd);
+      });
+    } else {
+      prompt("Sao chép lệnh này:", cmd);
+    }
+  }
+
+  function copyCustomCommand(code) {
+    const cmd = "python agent/enroll.py --server 127.0.0.1 --port 8443 --ca-cert certs/ogk-ca.crt --code " + code;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(cmd).then(() => {
+        showCopyFeedback("Đã sao chép lệnh cho mã: " + code);
+      }).catch(() => {
+        prompt("Sao chép lệnh này:", cmd);
+      });
+    } else {
+      prompt("Sao chép lệnh này:", cmd);
     }
   }
 
