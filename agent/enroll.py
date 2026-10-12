@@ -63,11 +63,18 @@ def compute_fingerprint() -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def call_enroll(server: str, port: int, ca_cert: str, code: str, fingerprint: str) -> dict:
-    url = f"https://{server}:{port}/enroll"
+def call_enroll(server: str, port: int, ca_cert: str | None, code: str, fingerprint: str, use_http: bool = False) -> dict:
+    scheme = "http" if use_http else "https"
+    url = f"{scheme}://{server}:{port}/enroll"
     body = json.dumps({"code": code, "device_fingerprint": fingerprint}).encode("utf-8")
 
-    ctx = ssl.create_default_context(cafile=ca_cert)
+    ctx = None
+    if not use_http:
+        if ca_cert and Path(ca_cert).exists():
+            ctx = ssl.create_default_context(cafile=ca_cert)
+        else:
+            ctx = ssl._create_unverified_context()
+
     req = urllib.request.Request(
         url,
         data=body,
@@ -99,9 +106,10 @@ def save_state(out_path: Path, state: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--server", required=True, help="IP của máy chủ (vd 10.11.0.55)")
+    parser.add_argument("--server", default="127.0.0.1", help="IP của máy chủ (vd 127.0.0.1 hoặc IP VM)")
     parser.add_argument("--port", type=int, default=8443)
-    parser.add_argument("--ca-cert", required=True, help="Đường dẫn tới ogk-ca.crt")
+    parser.add_argument("--ca-cert", default="certs/ogk-ca.crt", help="Đường dẫn tới ogk-ca.crt")
+    parser.add_argument("--http", action="store_true", help="Chạy HTTP thay vì HTTPS khi test dev cục bộ")
     parser.add_argument("--code", help="Mã ghép đôi (nếu bỏ qua, script sẽ hỏi)")
     parser.add_argument(
         "--out",
@@ -118,8 +126,9 @@ def main() -> None:
     fingerprint = compute_fingerprint()
     print(f"  fingerprint = {fingerprint[:16]}... (đã băm, không gửi dữ liệu thô)")
 
-    print(f"Đang gọi POST https://{args.server}:{args.port}/enroll ...")
-    result = call_enroll(args.server, args.port, args.ca_cert, code, fingerprint)
+    scheme = "http" if args.http else "https"
+    print(f"Đang gọi POST {scheme}://{args.server}:{args.port}/enroll ...")
+    result = call_enroll(args.server, args.port, args.ca_cert, code, fingerprint, use_http=args.http)
 
     out_path = Path(args.out)
     save_state(
@@ -131,6 +140,7 @@ def main() -> None:
             "policy_version": result["policy_version"],
             "server": args.server,
             "port": args.port,
+            "use_http": args.http,
         },
     )
 

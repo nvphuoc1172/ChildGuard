@@ -40,54 +40,266 @@ def _get_or_create_demo_parent(db: Session) -> models.Parent:
             email="demo@ogk.local",
             password_hash=security.hash_password("admin123"),
             full_name="Phụ huynh Demo",
+            failed_login_attempts=0,
         )
         db.add(parent)
         db.commit()
         db.refresh(parent)
+    else:
+        if not security.verify_password("admin123", parent.password_hash):
+            parent.password_hash = security.hash_password("admin123")
+            db.commit()
     return parent
 
 
+@router.get("/", response_class=RedirectResponse)
+def root_redirect():
+    """Chuyển hướng trang gốc về trang tổng quan phụ huynh."""
+    return RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
+
+
 @router.get("/dashboard/login", response_class=HTMLResponse)
-def login_page(request: Request):
+def login_page(
+    request: Request,
+    registered: int | None = None,
+    logout: int | None = None,
+    db: Session = Depends(get_db),
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """Trang đăng nhập phụ huynh."""
+    if parent:
+        return RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
+
+    _get_or_create_demo_parent(db)
+    success_msg = None
+    if registered:
+        success_msg = "Đăng ký tài khoản phụ huynh thành công! Mời bạn đăng nhập để tiếp tục."
+    elif logout:
+        success_msg = "Bạn đã đăng xuất thành công khỏi hệ thống."
+
     return templates.TemplateResponse(
-        request,
-        "login.html", 
-        {
-            "error": None
-        }
+        request=request,
+        name="login.html",
+        context={
+            "error": None,
+            "success": success_msg,
+            "email": "",
+        },
     )
 
 
 @router.post("/dashboard/login", response_class=HTMLResponse)
 def process_login(
     request: Request,
-    response: Response,
     email: str = Form(...),
     password: str = Form(...),
     db: Session = Depends(get_db),
 ):
+    """Xử lý đăng nhập phụ huynh với chính sách khóa tạm 15 phút sau 5 lần sai (F5)."""
+    email_clean = email.strip().lower()
     parent = (
         db.query(models.Parent)
-        .filter(models.Parent.email == email.strip().lower())
+        .filter(models.Parent.email == email_clean)
         .first()
     )
-    if not parent or not security.verify_password(password, parent.password_hash):
+
+    now = datetime.utcnow()
+    if parent and parent.locked_until and parent.locked_until > now:
+        remaining_sec = int((parent.locked_until - now).total_seconds())
+        remaining_min = max(1, (remaining_sec + 59) // 60)
         return templates.TemplateResponse(
-            request,
-            "login.html",
-            {"error": "Email hoặc mật khẩu không chính xác."},
+            request=request,
+            name="login.html",
+            context={
+                "error": f"Tài khoản đang bị tạm khóa an toàn do nhập sai 5 lần. Vui lòng thử lại sau khoảng {remaining_min} phút.",
+                "email": email_clean,
+                "success": None,
+            },
+            status_code=403,
+        )
+
+    if not parent or not security.verify_password(password, parent.password_hash):
+        if parent:
+            parent.failed_login_attempts += 1
+            if parent.failed_login_attempts >= 5:
+                parent.locked_until = now + timedelta(minutes=15)
+                db.commit()
+                return templates.TemplateResponse(
+                    request=request,
+                    name="login.html",
+                    context={
+                        "error": "Bạn đã nhập sai mật khẩu 5 lần. Tài khoản tạm khóa 15 phút (theo tiêu chuẩn NIST SP 800-63B & F5).",
+                        "email": email_clean,
+                        "success": None,
+                    },
+                    status_code=403,
+                )
+            db.commit()
+
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={
+                "error": "Email hoặc mật khẩu không chính xác.",
+                "email": email_clean,
+                "success": None,
+            },
             status_code=401,
         )
 
-    token = security.create_parent_session(parent.id)
+    # Đăng nhập thành công
+    parent.failed_login_attempts = 0
+    parent.locked_until = None
+    token = security.create_parent_session(parent.id, hours=12)
+
+    audit = models.AuditLog(
+        actor_type="parent",
+        actor_id=parent.id,
+        action="dashboard_login",
+        detail_json=f'{{"email": "{parent.email}"}}',
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
     redirect = RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
     redirect.set_cookie(
         key="ogk_session",
         value=token,
         httponly=True,
         samesite="lax",
-        max_age=86400,
+        max_age=43200,  # 12 giờ
     )
+    return redirect
+
+
+@router.post("/dashboard/quick-demo-login")
+def quick_demo_login(
+    db: Session = Depends(get_db),
+):
+    """Nút đăng nhập nhanh 1 chạm bằng tài khoản demo để kiểm thử."""
+    demo_parent = _get_or_create_demo_parent(db)
+    demo_parent.failed_login_attempts = 0
+    demo_parent.locked_until = None
+    db.commit()
+
+    token = security.create_parent_session(demo_parent.id, hours=12)
+    redirect = RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
+    redirect.set_cookie(
+        key="ogk_session",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=43200,
+    )
+    return redirect
+
+
+@router.get("/dashboard/register", response_class=HTMLResponse)
+def register_page(
+    request: Request,
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """Giao diện đăng ký tài khoản phụ huynh."""
+    if parent:
+        return RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="register.html",
+        context={
+            "error": None,
+            "form_data": {},
+        },
+    )
+
+
+@router.post("/dashboard/register", response_class=HTMLResponse)
+def process_register(
+    request: Request,
+    email: str = Form(...),
+    full_name: str = Form(default=""),
+    password: str = Form(...),
+    confirm_password: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Xử lý đăng ký tài khoản phụ huynh (mật khẩu >= 10 ký tự, kiểm tra trùng lặp email)."""
+    email_clean = email.strip().lower()
+    name_clean = full_name.strip() or "Phụ huynh"
+    form_data = {"email": email_clean, "full_name": full_name}
+
+    if "@" not in email_clean or "." not in email_clean:
+        return templates.TemplateResponse(
+            request=request,
+            name="register.html",
+            context={"error": "Địa chỉ email không hợp lệ.", "form_data": form_data},
+            status_code=400,
+        )
+
+    if password != confirm_password:
+        return templates.TemplateResponse(
+            request=request,
+            name="register.html",
+            context={"error": "Mật khẩu xác nhận không khớp với mật khẩu đã nhập.", "form_data": form_data},
+            status_code=400,
+        )
+
+    is_valid, msg = security.validate_password_strength(password)
+    if not is_valid:
+        return templates.TemplateResponse(
+            request=request,
+            name="register.html",
+            context={"error": msg, "form_data": form_data},
+            status_code=400,
+        )
+
+    existing = db.query(models.Parent).filter(models.Parent.email == email_clean).first()
+    if existing:
+        return templates.TemplateResponse(
+            request=request,
+            name="register.html",
+            context={
+                "error": "Email này đã được sử dụng. Vui lòng đăng nhập hoặc dùng email khác.",
+                "form_data": form_data,
+            },
+            status_code=400,
+        )
+
+    now = datetime.utcnow()
+    new_parent = models.Parent(
+        email=email_clean,
+        full_name=name_clean,
+        password_hash=security.hash_password(password),
+        failed_login_attempts=0,
+        created_at=now,
+    )
+    db.add(new_parent)
+    db.flush()
+
+    audit = models.AuditLog(
+        actor_type="parent",
+        actor_id=new_parent.id,
+        action="dashboard_register",
+        detail_json=f'{{"email": "{new_parent.email}", "name": "{new_parent.full_name}"}}',
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(new_parent)
+
+    # Đăng ký thành công -> Chuyển về trang đăng nhập kèm thông báo
+    return RedirectResponse(
+        url="/dashboard/login?registered=1",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@router.get("/dashboard/logout")
+@router.post("/dashboard/logout")
+def process_logout():
+    """Đăng xuất phụ huynh và chuyển hướng về trang đăng nhập."""
+    redirect = RedirectResponse(url="/dashboard/login?logout=1", status_code=status.HTTP_302_FOUND)
+    redirect.delete_cookie(key="ogk_session")
     return redirect
 
 
@@ -98,10 +310,44 @@ def dashboard_overview(
     parent: models.Parent | None = Depends(get_optional_parent),
 ):
     if not parent:
-        parent = _get_or_create_demo_parent(db)
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
 
     now = datetime.utcnow()
     today_start = datetime(now.year, now.month, now.day)
+
+    new_code = request.query_params.get("new_code")
+    new_child_name = request.query_params.get("child_name")
+
+    # Lấy danh sách các mã ghép đôi còn hiệu lực của phụ huynh này
+    active_codes = (
+        db.query(models.EnrollmentCode)
+        .filter(
+            models.EnrollmentCode.parent_id == parent.id,
+            models.EnrollmentCode.used_at.is_(None),
+            models.EnrollmentCode.expires_at > now,
+        )
+        .order_by(models.EnrollmentCode.created_at.desc())
+        .all()
+    )
+    active_codes_data = []
+    for ac in active_codes:
+        ch = db.get(models.Child, ac.child_id)
+        rem_sec = max(0, int((ac.expires_at - now).total_seconds()))
+        active_codes_data.append(
+            {
+                "code": ac.code,
+                "child_name": ch.display_name if ch else "Bé",
+                "expires_in_minutes": max(1, (rem_sec + 59) // 60),
+                "rem_sec": rem_sec,
+                "created_at": ac.created_at.strftime("%H:%M:%S"),
+            }
+        )
+
+    new_code_rem_sec = 600
+    if new_code:
+        nc_obj = db.get(models.EnrollmentCode, new_code.strip().upper())
+        if nc_obj and nc_obj.parent_id == parent.id:
+            new_code_rem_sec = max(0, int((nc_obj.expires_at - now).total_seconds()))
 
     devices = db.query(models.Device).order_by(models.Device.enrolled_at.desc()).all()
     children_data = []
@@ -166,8 +412,202 @@ def dashboard_overview(
             "current_user": parent,
             "children_data": children_data,
             "pending_requests": pending_reqs,
+            "new_code": new_code,
+            "new_child_name": new_child_name,
+            "new_code_rem_sec": new_code_rem_sec,
+            "active_codes": active_codes_data,
         },
     )
+
+
+@router.post("/dashboard/action/create-code")
+def create_enrollment_code_action(
+    request: Request,
+    child_name: str = Form(default="Minh An"),
+    db: Session = Depends(get_db),
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """Tạo mã ghép đôi 8 ký tự cho trẻ từ Dashboard phụ huynh (Nghị định 13/2023)."""
+    if not parent:
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
+
+    name_clean = child_name.strip() or "Bé yêu"
+    child = (
+        db.query(models.Child)
+        .filter(models.Child.parent_id == parent.id, models.Child.display_name == name_clean)
+        .first()
+    )
+    if not child:
+        child = models.Child(parent_id=parent.id, display_name=name_clean)
+        db.add(child)
+        db.flush()
+
+    code = security.generate_enrollment_code()
+    expires_at = security.enrollment_code_expiry()
+    enrollment = models.EnrollmentCode(
+        code=code,
+        parent_id=parent.id,
+        child_id=child.id,
+        expires_at=expires_at,
+    )
+    db.add(enrollment)
+
+    now = datetime.utcnow()
+    audit = models.AuditLog(
+        actor_type="parent",
+        actor_id=parent.id,
+        action="create_enrollment_code",
+        detail_json=json.dumps({"code": code, "child_id": child.id, "child_name": child.display_name}),
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
+    return RedirectResponse(
+        url=f"/dashboard?new_code={code}&child_name={child.display_name}",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@router.get("/dashboard/enroll", response_class=HTMLResponse)
+def enroll_tab_page(
+    request: Request,
+    code: str | None = None,
+    db: Session = Depends(get_db),
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """Tab riêng để lấy mã ghép đôi mới cho trẻ (lấy cho máy bất kỳ, không phân biệt ai)."""
+    if not parent:
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
+
+    now = datetime.utcnow()
+    raw_codes = (
+        db.query(models.EnrollmentCode)
+        .filter(models.EnrollmentCode.parent_id == parent.id)
+        .order_by(models.EnrollmentCode.created_at.desc())
+        .limit(20)
+        .all()
+    )
+
+    codes_data = []
+    latest_active_code = None
+
+    for c in raw_codes:
+        is_used = c.used_at is not None
+        is_expired = c.expires_at < now
+        rem_sec = max(0, int((c.expires_at - now).total_seconds()))
+        rem_min = max(1, (rem_sec + 59) // 60) if not is_used and not is_expired else 0
+
+        status_text = "Đã kết nối" if is_used else ("Đã hết hạn" if is_expired else "Đang chờ nhập")
+        badge_class = "badge-success" if is_used else ("badge-danger" if is_expired else "badge-warning")
+
+        item = {
+            "code": c.code,
+            "created_at": c.created_at.strftime("%H:%M:%S %d/%m/%Y"),
+            "expires_at": c.expires_at.strftime("%H:%M:%S %d/%m/%Y"),
+            "expires_at_iso": c.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rem_sec": rem_sec if not is_used and not is_expired else 0,
+            "used_at": c.used_at.strftime("%H:%M:%S %d/%m/%Y") if c.used_at else None,
+            "is_used": is_used,
+            "is_expired": is_expired,
+            "status_text": status_text,
+            "badge_class": badge_class,
+            "rem_min": rem_min,
+        }
+        codes_data.append(item)
+
+        # Ưu tiên lấy mã truyền từ query param, nếu không thì lấy mã active gần nhất
+        if code and c.code == code and not is_used and not is_expired:
+            latest_active_code = item
+        elif not latest_active_code and not is_used and not is_expired:
+            latest_active_code = item
+
+    return templates.TemplateResponse(
+        request=request,
+        name="enroll.html",
+        context={
+            "active_page": "enroll",
+            "current_user": parent,
+            "latest_code": latest_active_code,
+            "codes_history": codes_data,
+        },
+    )
+
+
+@router.get("/dashboard/enroll/status")
+def get_enrollment_code_status(
+    code: str,
+    db: Session = Depends(get_db),
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """API endpoint để frontend kiểm tra realtime trạng thái mã ghép đôi mà không cần reload trang."""
+    if not parent:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
+
+    code_clean = code.strip().upper()
+    c = db.get(models.EnrollmentCode, code_clean)
+    if not c or c.parent_id != parent.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="code_not_found")
+
+    now = datetime.utcnow()
+    is_used = c.used_at is not None
+    is_expired = c.expires_at < now
+    rem_sec = max(0, int((c.expires_at - now).total_seconds()))
+    rem_min = max(1, (rem_sec + 59) // 60) if not is_used and not is_expired else 0
+
+    status_text = "Đã kết nối" if is_used else ("Đã hết hạn" if is_expired else "Đang chờ nhập")
+    badge_class = "badge-success" if is_used else ("badge-danger" if is_expired else "badge-warning")
+
+    return {
+        "code": c.code,
+        "is_used": is_used,
+        "is_expired": is_expired,
+        "rem_sec": rem_sec if not is_used and not is_expired else 0,
+        "rem_min": rem_min,
+        "status_text": status_text,
+        "badge_class": badge_class,
+        "used_at": c.used_at.strftime("%H:%M:%S %d/%m/%Y") if c.used_at else None,
+        "expires_at": c.expires_at.strftime("%H:%M:%S %d/%m/%Y"),
+    }
+
+
+@router.post("/dashboard/enroll/generate")
+def generate_enrollment_code_quick(
+    db: Session = Depends(get_db),
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """Sinh mã ghép đôi tức thì cho trẻ bất kỳ mà không cần điền form."""
+    if not parent:
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
+
+    child = db.query(models.Child).filter(models.Child.parent_id == parent.id).first()
+    if not child:
+        child = models.Child(parent_id=parent.id, display_name="Máy của trẻ")
+        db.add(child)
+        db.flush()
+
+    code = security.generate_enrollment_code()
+    expires_at = security.enrollment_code_expiry()
+    enrollment = models.EnrollmentCode(
+        code=code,
+        parent_id=parent.id,
+        child_id=child.id,
+        expires_at=expires_at,
+    )
+    db.add(enrollment)
+
+    now = datetime.utcnow()
+    audit = models.AuditLog(
+        actor_type="parent",
+        actor_id=parent.id,
+        action="quick_generate_enrollment_code",
+        detail_json=json.dumps({"code": code}),
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
+    return RedirectResponse(url=f"/dashboard/enroll?code={code}", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/dashboard/action/command")
@@ -253,7 +693,7 @@ def policy_page(
     parent: models.Parent | None = Depends(get_optional_parent),
 ):
     if not parent:
-        parent = _get_or_create_demo_parent(db)
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
 
     children = db.query(models.Child).all()
     if not children:
@@ -316,7 +756,7 @@ def save_policy_page(
     parent: models.Parent | None = Depends(get_optional_parent),
 ):
     if not parent:
-        parent = _get_or_create_demo_parent(db)
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
 
     child = db.get(models.Child, child_id)
     if not child:
@@ -393,7 +833,7 @@ def requests_page(
     parent: models.Parent | None = Depends(get_optional_parent),
 ):
     if not parent:
-        parent = _get_or_create_demo_parent(db)
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
 
     reqs = db.query(models.ChildRequest).order_by(models.ChildRequest.created_at.desc()).all()
     rows = []
@@ -428,7 +868,7 @@ def reports_page(
     parent: models.Parent | None = Depends(get_optional_parent),
 ):
     if not parent:
-        parent = _get_or_create_demo_parent(db)
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
 
     now = datetime.utcnow()
     today_start = datetime(now.year, now.month, now.day)
@@ -489,7 +929,7 @@ def audit_page(
     parent: models.Parent | None = Depends(get_optional_parent),
 ):
     if not parent:
-        parent = _get_or_create_demo_parent(db)
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
 
     logs = db.query(models.AuditLog).order_by(models.AuditLog.created_at.desc()).limit(100).all()
     rows = []
@@ -515,8 +955,14 @@ def audit_page(
 
 
 @router.get("/dashboard/devices")
-def device_status_page(request: Request, db: Session = Depends(get_db)):
-    """Trang tương thích ngược xem danh sách thiết bị."""
+def device_status_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """Trang xem danh sách thiết bị."""
+    if not parent:
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
     now = datetime.utcnow()
     devices = db.query(models.Device).order_by(models.Device.enrolled_at.desc()).all()
 

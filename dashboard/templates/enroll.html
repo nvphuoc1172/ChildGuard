@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+
+{% block title %}Lấy mã ghép đôi cho bé · ChildGuard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">🔑 Lấy mã ghép đôi thiết bị</h1>
+    <div class="page-title-sub">Sinh mã nhanh để kết nối máy tính của trẻ vào hệ thống bảo vệ của gia đình</div>
+  </div>
+</div>
+
+<!-- Khối tạo mã nhanh -->
+<div class="card" style="margin-bottom: 24px; background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%); border: 1px solid var(--border-color);">
+  <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+    <div>
+      <h2 style="font-size: 18px; font-weight: 700; color: var(--text-main);">Tạo mã ghép đôi mới cho máy trẻ</h2>
+      <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+        Chỉ cần bấm nút bên cạnh, hệ thống sẽ sinh ngay mã 8 ký tự có hạn trong 10 phút. Mã này dùng được cho bất kỳ máy tính nào của bé.
+      </p>
+    </div>
+    <form action="/dashboard/enroll/generate" method="POST">
+      <button type="submit" class="btn btn-primary" style="padding: 12px 24px; font-weight: 700; font-size: 15px; box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4);">
+        ⚡ Sinh mã ghép đôi mới
+      </button>
+    </form>
+  </div>
+
+  {% if latest_code %}
+  <div id="activeCodeCard" style="margin-top: 24px; padding: 20px; background: rgba(15, 23, 42, 0.8); border: 1px solid var(--primary); border-radius: var(--radius-md); transition: all 0.3s ease;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
+      <div>
+        <div id="latestCodeHeader" style="font-size: 13px; font-weight: 600; text-transform: uppercase; color: #60a5fa; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span id="latestCodeIcon">🟢</span>
+          <span id="latestCodeStatusTitle">Mã đang hoạt động</span>
+          <span style="color: var(--text-muted); font-weight: normal; text-transform: none;">(Hiệu lực còn:</span>
+          <span id="latestCountdownBadge" style="font-family: monospace; font-size: 15px; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.15); padding: 2px 10px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.3); display: inline-flex; align-items: center; gap: 4px;">
+            ⏱️ <span id="latestCountdownValue">{{ "%02d:%02d"|format(latest_code.rem_sec // 60, latest_code.rem_sec % 60) }}</span>
+          </span>
+          <span style="color: var(--text-muted); font-weight: normal; text-transform: none;">)</span>
+        </div>
+
+        <!-- Thanh tiến trình thời gian trực quan -->
+        <div style="width: 100%; max-width: 380px; height: 5px; background: rgba(255, 255, 255, 0.08); border-radius: 3px; margin-top: 10px; overflow: hidden;">
+          <div id="latestCodeProgressBar" style="height: 100%; width: {{ [((latest_code.rem_sec / 600.0) * 100)|round, 100]|min }}%; background: #38bdf8; transition: width 1s linear, background-color 0.4s ease;"></div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 14px; margin-top: 12px; flex-wrap: wrap;">
+          <div id="latestCodeDisplay" style="font-size: 34px; font-weight: 800; letter-spacing: 6px; color: #38bdf8; background: var(--bg-surface); padding: 8px 20px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-family: monospace;">
+            {{ latest_code.code }}
+          </div>
+          <button id="copyBtn" type="button" class="btn btn-outline btn-sm" onclick="copyCode('{{ latest_code.code }}')">
+            📋 Sao chép mã
+          </button>
+        </div>
+
+        <div id="liveStatusAlert" style="margin-top: 12px; display: none; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;"></div>
+      </div>
+      <div style="font-size: 12px; color: var(--text-soft); text-align: right;">
+        Tạo lúc: <strong>{{ latest_code.created_at }}</strong><br>
+        Hết hạn lúc: <strong id="latestCodeExpiresAt">{{ latest_code.expires_at }}</strong>
+      </div>
+    </div>
+
+    <div style="margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--border-color); font-size: 13px; color: var(--text-muted);">
+      💻 <strong>Lệnh nhập mã trên máy của bé (chạy trên terminal hoặc PowerShell):</strong>
+      <div style="margin-top: 8px; background: #090d16; padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-family: monospace; color: #6ee7b7; word-break: break-all;">
+        python agent/enroll.py --server 127.0.0.1 --port 8443 --ca-cert certs/ogk-ca.crt --code {{ latest_code.code }}
+      </div>
+      <div style="font-size: 11px; color: var(--text-soft); margin-top: 6px;">
+        *Nếu bạn chạy kiểm thử cục bộ bằng HTTP cổng 8000: thêm <code>--http --port 8000</code> vào cuối lệnh.
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Bảng lịch sử các mã ghép đôi -->
+<div class="card">
+  <div class="card-title">
+    <span>📜 Danh sách mã ghép đôi đã sinh</span>
+    <span class="badge">{{ codes_history|length }} mã gần đây</span>
+  </div>
+
+  {% if codes_history %}
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Mã ghép đôi</th>
+          <th>Thời gian tạo</th>
+          <th>Thời hạn (10 phút)</th>
+          <th>Trạng thái</th>
+          <th>Thao tác</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in codes_history %}
+        <tr id="row-{{ item.code }}">
+          <td>
+            <code class="code-val-{{ item.code }}" style="font-weight: 700; font-size: 14px; color: {% if not item.is_used and not item.is_expired %}#38bdf8{% else %}var(--text-muted){% endif %};">
+              {{ item.code }}
+            </code>
+          </td>
+          <td style="font-size: 13px; color: var(--text-muted);">{{ item.created_at }}</td>
+          <td style="font-size: 13px; color: var(--text-muted);">{{ item.expires_at }}</td>
+          <td>
+            <span id="badge-{{ item.code }}" class="badge {{ item.badge_class }} {% if not item.is_used and not item.is_expired %}table-live-timer{% endif %}"
+                  data-code="{{ item.code }}"
+                  data-rem-sec="{{ item.rem_sec }}"
+                  data-used="{{ 1 if item.is_used else 0 }}">
+              <span id="status-text-{{ item.code }}">{{ item.status_text }}</span>
+              {% if not item.is_used and not item.is_expired %}
+                (<span id="timer-{{ item.code }}">{{ "%02d:%02d"|format(item.rem_sec // 60, item.rem_sec % 60) }}</span>)
+              {% endif %}
+            </span>
+          </td>
+          <td id="action-{{ item.code }}">
+            {% if not item.is_used and not item.is_expired %}
+              <button type="button" class="btn btn-sm btn-outline copy-btn-{{ item.code }}" onclick="copyCode('{{ item.code }}')" style="padding: 3px 8px; font-size: 11px;">
+                📋 Sao chép
+              </button>
+            {% else %}
+              <span style="color: var(--text-soft); font-size: 12px;">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div style="text-align: center; padding: 30px; color: var(--text-soft); font-size: 14px;">
+    Chưa có mã ghép đôi nào được tạo. Hãy bấm nút <strong>"Sinh mã ghép đôi mới"</strong> ở trên để bắt đầu kết nối máy của bé.
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  function copyCode(code) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(code).then(() => {
+        showCopyFeedback("Đã sao chép mã: " + code);
+      }).catch(() => {
+        prompt("Sao chép mã ghép đôi này:", code);
+      });
+    } else {
+      prompt("Sao chép mã ghép đôi này:", code);
+    }
+  }
+
+  function showCopyFeedback(msg) {
+    let feedback = document.getElementById("copyFeedbackToast");
+    if (!feedback) {
+      feedback = document.createElement("div");
+      feedback.id = "copyFeedbackToast";
+      feedback.style.position = "fixed";
+      feedback.style.bottom = "24px";
+      feedback.style.right = "24px";
+      feedback.style.backgroundColor = "#10b981";
+      feedback.style.color = "#ffffff";
+      feedback.style.padding = "10px 18px";
+      feedback.style.borderRadius = "8px";
+      feedback.style.boxShadow = "0 4px 14px rgba(0,0,0,0.4)";
+      feedback.style.fontSize = "14px";
+      feedback.style.fontWeight = "600";
+      feedback.style.zIndex = "9999";
+      feedback.style.transition = "opacity 0.3s ease";
+      document.body.appendChild(feedback);
+    }
+    feedback.textContent = msg;
+    feedback.style.opacity = "1";
+    setTimeout(() => { feedback.style.opacity = "0"; }, 2500);
+  }
+
+  // Live countdown & auto status refresh
+  (function() {
+    let initialRemSec = {{ latest_code.rem_sec if latest_code else 0 }};
+    const activeCode = "{{ latest_code.code if latest_code else '' }}";
+    const startTime = Date.now();
+    let isUsed = false;
+    let isExpired = {{ 1 if (latest_code and latest_code.is_expired) else 0 }};
+
+    function formatMMSS(seconds) {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+    }
+
+    function tick() {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+
+      // Cập nhật card mã đang hoạt động
+      if (activeCode && !isUsed) {
+        const curSec = Math.max(0, initialRemSec - elapsed);
+        const timerVal = document.getElementById("latestCountdownValue");
+        const prog = document.getElementById("latestCodeProgressBar");
+        const badge = document.getElementById("latestCountdownBadge");
+        const icon = document.getElementById("latestCodeIcon");
+        const title = document.getElementById("latestCodeStatusTitle");
+        const alertBox = document.getElementById("liveStatusAlert");
+
+        if (timerVal) {
+          timerVal.textContent = formatMMSS(curSec);
+        }
+
+        if (prog) {
+          const pct = Math.max(0, Math.min(100, (curSec / 600) * 100));
+          prog.style.width = pct + "%";
+          if (curSec <= 60) {
+            prog.style.backgroundColor = "#ef4444";
+            if (badge) {
+              badge.style.color = "#ef4444";
+              badge.style.borderColor = "rgba(239, 68, 68, 0.4)";
+              badge.style.background = "rgba(239, 68, 68, 0.15)";
+            }
+          } else if (curSec <= 180) {
+            prog.style.backgroundColor = "#f59e0b";
+            if (badge) {
+              badge.style.color = "#f59e0b";
+              badge.style.borderColor = "rgba(245, 158, 11, 0.4)";
+              badge.style.background = "rgba(245, 158, 11, 0.15)";
+            }
+          }
+        }
+
+        if (curSec <= 0 && !isExpired) {
+          isExpired = true;
+          if (icon) icon.textContent = "🔴";
+          if (title) title.textContent = "Mã đã hết hiệu lực";
+          if (timerVal) timerVal.textContent = "00:00 (Hết hạn)";
+          if (badge) {
+            badge.style.color = "#ef4444";
+            badge.style.borderColor = "rgba(239, 68, 68, 0.4)";
+            badge.style.background = "rgba(239, 68, 68, 0.15)";
+          }
+          if (alertBox) {
+            alertBox.style.display = "block";
+            alertBox.style.backgroundColor = "rgba(239, 68, 68, 0.15)";
+            alertBox.style.color = "#fca5a5";
+            alertBox.style.border = "1px solid rgba(239, 68, 68, 0.3)";
+            alertBox.innerHTML = "⚠️ Mã đã hết hạn 10 phút. Vui lòng bấm <strong>⚡ Sinh mã ghép đôi mới</strong> ở trên để tạo mã khác.";
+          }
+          markTableExpired(activeCode);
+        }
+      }
+
+      // Cập nhật từng dòng trong bảng lịch sử
+      document.querySelectorAll(".table-live-timer").forEach(el => {
+        const code = el.getAttribute("data-code");
+        const initSec = parseInt(el.getAttribute("data-rem-sec"), 10) || 0;
+        const curSec = Math.max(0, initSec - elapsed);
+        const timerSpan = document.getElementById("timer-" + code);
+        if (timerSpan) {
+          timerSpan.textContent = formatMMSS(curSec);
+        }
+        if (curSec <= 0) {
+          markTableExpired(code);
+        }
+      });
+    }
+
+    function markTableExpired(code) {
+      const badge = document.getElementById("badge-" + code);
+      if (badge && !badge.classList.contains("badge-success")) {
+        badge.className = "badge badge-danger";
+        badge.innerHTML = "Đã hết hạn";
+      }
+      const actionCell = document.getElementById("action-" + code);
+      if (actionCell) {
+        actionCell.innerHTML = '<span style="color: var(--text-soft); font-size: 12px;">—</span>';
+      }
+      const codeElem = document.querySelector(".code-val-" + code);
+      if (codeElem) {
+        codeElem.style.color = "var(--text-muted)";
+      }
+    }
+
+    function markTableUsed(code) {
+      const badge = document.getElementById("badge-" + code);
+      if (badge) {
+        badge.className = "badge badge-success";
+        badge.innerHTML = "Đã kết nối";
+      }
+      const actionCell = document.getElementById("action-" + code);
+      if (actionCell) {
+        actionCell.innerHTML = '<span style="color: var(--text-soft); font-size: 12px;">—</span>';
+      }
+    }
+
+    // Polling tự động kiểm tra server khi máy bé nhập mã xong
+    async function checkActiveStatus() {
+      if (!activeCode || isUsed || isExpired) return;
+      try {
+        const res = await fetch("/dashboard/enroll/status?code=" + encodeURIComponent(activeCode));
+        if (res.ok) {
+          const data = await res.json();
+          if (data.is_used) {
+            isUsed = true;
+            const icon = document.getElementById("latestCodeIcon");
+            const title = document.getElementById("latestCodeStatusTitle");
+            const badge = document.getElementById("latestCountdownBadge");
+            const alertBox = document.getElementById("liveStatusAlert");
+            const prog = document.getElementById("latestCodeProgressBar");
+            const card = document.getElementById("activeCodeCard");
+
+            if (icon) icon.textContent = "🎉";
+            if (title) title.textContent = "Đã ghép đôi thành công!";
+            if (badge) {
+              badge.innerHTML = "ĐÃ KẾT NỐI ✓";
+              badge.style.color = "#10b981";
+              badge.style.borderColor = "rgba(16, 185, 129, 0.4)";
+              badge.style.background = "rgba(16, 185, 129, 0.2)";
+            }
+            if (prog) {
+              prog.style.backgroundColor = "#10b981";
+              prog.style.width = "100%";
+            }
+            if (card) {
+              card.style.borderColor = "rgba(16, 185, 129, 0.5)";
+            }
+            if (alertBox) {
+              alertBox.style.display = "block";
+              alertBox.style.backgroundColor = "rgba(16, 185, 129, 0.15)";
+              alertBox.style.color = "#6ee7b7";
+              alertBox.style.border = "1px solid rgba(16, 185, 129, 0.3)";
+              alertBox.innerHTML = `✅ Máy của bé đã kết nối thành công lúc <strong>${data.used_at || ''}</strong>! <a href="/dashboard" class="btn btn-primary btn-sm" style="margin-left: 10px; display: inline-block; text-decoration: none; padding: 4px 12px;">👉 Xem trạng thái trên Dashboard</a>`;
+            }
+            markTableUsed(activeCode);
+          } else if (data.is_expired) {
+            isExpired = true;
+            markTableExpired(activeCode);
+          }
+        }
+      } catch (err) {
+        // Ignored, client timer continues smoothly
+      }
+    }
+
+    setInterval(tick, 1000);
+    tick();
+
+    if (activeCode) {
+      setInterval(checkActiveStatus, 3000);
+    }
+  })();
+</script>
+{% endblock %}

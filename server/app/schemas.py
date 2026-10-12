@@ -127,3 +127,18 @@ class ParentLoginResponse(BaseModel):
     token_type: str = "bearer"
     parent_email: str
     parent_name: str
+
+
+class ParentRegisterRequest(BaseModel):
+    email: str
+    password: str = Field(..., min_length=10, description="Mật khẩu tối thiểu 10 ký tự theo NIST SP 800-63B")
+    full_name: str | None = Field(default="Phụ huynh", description="Họ và tên phụ huynh")
+
+
+class ParentRegisterResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    parent_id: str
+    parent_email: str
+    parent_name: str
+    message: str = "Đăng ký tài khoản phụ huynh thành công"

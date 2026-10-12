@@ -3,80 +3,258 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Đăng nhập phụ huynh · ChildGuard</title>
+  <title>Đăng nhập phụ huynh · ChildGuard (OpenGuard Kids)</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <style>
-    .login-wrapper {
+    .auth-wrapper {
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 20px;
+      padding: 24px 16px;
+      background: radial-gradient(circle at top center, #1e293b 0%, #0f172a 70%);
     }
-    .login-card {
+    .auth-card {
       width: 100%;
-      max-width: 400px;
+      max-width: 440px;
       background-color: var(--bg-surface);
       border: 1px solid var(--border-color);
       border-radius: var(--radius-lg);
-      padding: 32px;
-      box-shadow: var(--shadow);
+      padding: 36px 32px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
     }
-    .login-logo {
+    .auth-brand {
       text-align: center;
       margin-bottom: 24px;
     }
-    .login-logo .icon {
-      font-size: 40px;
-      margin-bottom: 8px;
+    .auth-brand .brand-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 56px;
+      height: 56px;
+      background: linear-gradient(135deg, var(--primary), #8b5cf6);
+      border-radius: 14px;
+      font-size: 28px;
+      margin-bottom: 12px;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
     }
-    .login-logo h1 {
+    .auth-brand h1 {
       font-size: 22px;
       font-weight: 700;
+      color: var(--text-main);
+      letter-spacing: -0.02em;
     }
-    .error-msg {
-      background-color: var(--danger-bg);
-      color: var(--danger);
-      padding: 10px 14px;
-      border-radius: var(--radius-sm);
-      margin-bottom: 16px;
+    .auth-brand p {
       font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .auth-tabs {
+      display: flex;
+      background-color: var(--bg-app);
+      border-radius: var(--radius-sm);
+      padding: 4px;
+      margin-bottom: 24px;
+      border: 1px solid var(--border-color);
+    }
+    .auth-tab {
+      flex: 1;
+      text-align: center;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-decoration: none;
+      border-radius: 4px;
+      transition: all 0.2s ease;
+    }
+    .auth-tab.active {
+      background-color: var(--bg-surface-elevated);
+      color: var(--text-main);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .auth-tab:hover:not(.active) {
+      color: var(--text-main);
+    }
+    .alert-box {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      margin-bottom: 20px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .alert-error {
+      background-color: var(--danger-bg);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+    }
+    .alert-success {
+      background-color: var(--success-bg);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #6ee7b7;
+    }
+    .password-wrap {
+      position: relative;
+    }
+    .password-toggle {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-soft);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 4px;
+    }
+    .password-toggle:hover {
+      color: var(--text-main);
+    }
+    .demo-box {
+      margin-top: 24px;
+      padding: 14px 16px;
+      background-color: rgba(15, 23, 42, 0.6);
+      border: 1px dashed var(--border-subtle);
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+    }
+    .demo-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .btn-quick-demo {
+      background-color: var(--bg-surface-elevated);
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+      padding: 6px 12px;
+      font-size: 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-quick-demo:hover {
+      background-color: var(--primary);
+      border-color: var(--primary);
+      color: white;
+    }
+    .compliance-footer {
+      margin-top: 24px;
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-soft);
+      line-height: 1.5;
     }
   </style>
 </head>
 <body>
-  <div class="login-wrapper">
-    <div class="login-card">
-      <div class="login-logo">
-        <div class="icon">🛡️</div>
-        <h1>ChildGuard (OGK)</h1>
-        <p style="font-size: 13px; color: var(--text-muted);">Đăng nhập bảng điều khiển phụ huynh</p>
+  <div class="auth-wrapper">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <div class="brand-badge">🛡️</div>
+        <h1>ChildGuard (OpenGuard Kids)</h1>
+        <p>Bảng điều khiển phụ huynh · Đồng hành cùng con</p>
+      </div>
+
+      <!-- Tab điều hướng Đăng nhập / Đăng ký -->
+      <div class="auth-tabs">
+        <a href="/dashboard/login" class="auth-tab active">Đăng nhập</a>
+        <a href="/dashboard/register" class="auth-tab">Đăng ký mới</a>
       </div>
 
       {% if error %}
-      <div class="error-msg">{{ error }}</div>
+      <div class="alert-box alert-error">
+        <span>⚠️</span>
+        <div>{{ error }}</div>
+      </div>
+      {% endif %}
+
+      {% if success %}
+      <div class="alert-box alert-success">
+        <span>✅</span>
+        <div>{{ success }}</div>
+      </div>
       {% endif %}
 
       <form method="POST" action="/dashboard/login">
         <div class="form-group">
-          <label class="form-label">Email phụ huynh</label>
-          <input type="email" name="email" class="form-input" placeholder="demo@ogk.local" required autofocus>
+          <label class="form-label" for="email">Email phụ huynh</label>
+          <input 
+            type="email" 
+            id="email" 
+            name="email" 
+            class="form-input" 
+            placeholder="vd: demo@ogk.local" 
+            value="{{ email or '' }}" 
+            required 
+            autofocus
+          >
         </div>
 
         <div class="form-group">
-          <label class="form-label">Mật khẩu</label>
-          <input type="password" name="password" class="form-input" placeholder="••••••••" required>
+          <label class="form-label" for="password">Mật khẩu</label>
+          <div class="password-wrap">
+            <input 
+              type="password" 
+              id="password" 
+              name="password" 
+              class="form-input" 
+              placeholder="••••••••••••" 
+              required
+            >
+            <button type="button" class="password-toggle" onclick="togglePassword('password', this)" title="Hiện/ẩn mật khẩu">👁️</button>
+          </div>
         </div>
 
-        <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 10px; padding: 12px;">
-          Đăng nhập
+        <button type="submit" class="btn btn-primary" style="width: 100%; padding: 12px; margin-top: 8px; font-weight: 600;">
+          Đăng nhập vào Bảng điều khiển
         </button>
       </form>
 
-      <div style="margin-top: 24px; font-size: 12px; color: var(--text-soft); text-align: center;">
-        Tài khoản demo: <code>demo@ogk.local</code> (mật khẩu bất kỳ)
+      <!-- Khối tài khoản Demo cho GV/Kiểm thử viên -->
+      <div class="demo-box">
+        <div class="demo-header">
+          <span>⚡ Tài khoản Demo kiểm thử:</span>
+          <form method="POST" action="/dashboard/quick-demo-login" style="display:inline;">
+            <button type="submit" class="btn-quick-demo" title="Đăng nhập ngay không cần nhập thông tin">Vào thẳng Demo</button>
+          </form>
+        </div>
+        <div style="color: var(--text-soft);">
+          Email: <code style="color: var(--primary);">demo@ogk.local</code> &bull; Mật khẩu: <code style="color: var(--primary);">admin123</code>
+        </div>
+      </div>
+
+      <div style="margin-top: 20px; text-align: center; font-size: 13px;">
+        <span style="color: var(--text-muted);">Chưa có tài khoản phụ huynh?</span>
+        <a href="/dashboard/register" style="color: var(--primary); text-decoration: none; font-weight: 600; margin-left: 4px;">Đăng ký ngay</a>
+      </div>
+
+      <div class="compliance-footer">
+        <div>🔒 Tuân thủ Nghị định 13/2023/NĐ-CP & NIST SP 800-63B</div>
+        <div style="margin-top: 2px;">Tự động tạm khóa 15 phút nếu nhập sai quá 5 lần để chống dò mật khẩu.</div>
       </div>
     </div>
   </div>
+
+  <script>
+    function togglePassword(inputId, btn) {
+      const inp = document.getElementById(inputId);
+      if (inp.type === 'password') {
+        inp.type = 'text';
+        btn.textContent = '🙈';
+      } else {
+        inp.type = 'password';
+        btn.textContent = '👁️';
+      }
+    }
+  </script>
 </body>
 </html>

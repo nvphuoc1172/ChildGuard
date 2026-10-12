@@ -68,7 +68,23 @@ import time
 SESSION_SECRET = "ogk-parent-secret-lab-2026-safe"
 
 
-def create_parent_session(parent_id: str, hours: int = 24) -> str:
+def verify_password(password: str, hashed: str, salt: str = "ogk-parent-salt") -> bool:
+    """Xác minh mật khẩu bằng so sánh an toàn constant-time tránh timing attack."""
+    if not password or not hashed:
+        return False
+    computed = hash_password(password, salt=salt)
+    return hmac.compare_digest(computed, hashed)
+
+
+def validate_password_strength(password: str) -> tuple[bool, str]:
+    """Kiểm tra độ mạnh mật khẩu theo NIST SP 800-63B và đề bài F5 (tối thiểu 10 ký tự)."""
+    if not password or len(password) < 10:
+        return False, "Mật khẩu phải có tối thiểu 10 ký tự (theo NIST SP 800-63B và chuẩn F5)."
+    return True, ""
+
+
+def create_parent_session(parent_id: str, hours: int = 12) -> str:
+    """Tạo session token cho phụ huynh có chữ ký HMAC (hạn 12 giờ theo F5)."""
     expires = int(time.time()) + (hours * 3600)
     msg = f"{parent_id}:{expires}"
     sig = hmac.new(SESSION_SECRET.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).hexdigest()

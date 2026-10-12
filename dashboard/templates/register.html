@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Đăng ký tài khoản phụ huynh · ChildGuard (OpenGuard Kids)</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    .auth-wrapper {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      background: radial-gradient(circle at top center, #1e293b 0%, #0f172a 70%);
+    }
+    .auth-card {
+      width: 100%;
+      max-width: 440px;
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 36px 32px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+    }
+    .auth-brand {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .auth-brand .brand-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 56px;
+      height: 56px;
+      background: linear-gradient(135deg, var(--primary), #8b5cf6);
+      border-radius: 14px;
+      font-size: 28px;
+      margin-bottom: 12px;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
+    }
+    .auth-brand h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-main);
+      letter-spacing: -0.02em;
+    }
+    .auth-brand p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .auth-tabs {
+      display: flex;
+      background-color: var(--bg-app);
+      border-radius: var(--radius-sm);
+      padding: 4px;
+      margin-bottom: 24px;
+      border: 1px solid var(--border-color);
+    }
+    .auth-tab {
+      flex: 1;
+      text-align: center;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-decoration: none;
+      border-radius: 4px;
+      transition: all 0.2s ease;
+    }
+    .auth-tab.active {
+      background-color: var(--bg-surface-elevated);
+      color: var(--text-main);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .auth-tab:hover:not(.active) {
+      color: var(--text-main);
+    }
+    .alert-box {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      margin-bottom: 20px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .alert-error {
+      background-color: var(--danger-bg);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+    }
+    .password-wrap {
+      position: relative;
+    }
+    .password-toggle {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-soft);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 4px;
+    }
+    .password-toggle:hover {
+      color: var(--text-main);
+    }
+    .pw-rules {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .pw-rules.valid {
+      color: var(--success);
+    }
+    .pw-rules.invalid {
+      color: var(--text-soft);
+    }
+    .compliance-footer {
+      margin-top: 24px;
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-soft);
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="auth-wrapper">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <div class="brand-badge">🛡️</div>
+        <h1>ChildGuard (OpenGuard Kids)</h1>
+        <p>Đăng ký tài khoản phụ huynh</p>
+      </div>
+
+      <!-- Tab điều hướng Đăng nhập / Đăng ký -->
+      <div class="auth-tabs">
+        <a href="/dashboard/login" class="auth-tab">Đăng nhập</a>
+        <a href="/dashboard/register" class="auth-tab active">Đăng ký mới</a>
+      </div>
+
+      {% if error %}
+      <div class="alert-box alert-error">
+        <span>⚠️</span>
+        <div>{{ error }}</div>
+      </div>
+      {% endif %}
+
+      <form method="POST" action="/dashboard/register" onsubmit="return validateRegisterForm()">
+        <div class="form-group">
+          <label class="form-label" for="email">Email</label>
+          <input 
+            type="email" 
+            id="email" 
+            name="email" 
+            class="form-input" 
+            placeholder="vd: phuhuynh@example.com" 
+            value="{{ form_data.email if form_data else '' }}"
+            required
+            autofocus
+          >
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="password">Mật khẩu</label>
+          <div class="password-wrap">
+            <input 
+              type="password" 
+              id="password" 
+              name="password" 
+              class="form-input" 
+              placeholder="Tối thiểu 10 ký tự" 
+              minlength="10"
+              oninput="checkPasswordLength()"
+              required
+            >
+            <button type="button" class="password-toggle" onclick="togglePassword('password', this)" title="Hiện/ẩn mật khẩu">👁️</button>
+          </div>
+          <div id="pw-hint" class="pw-rules invalid">
+            <span id="pw-hint-icon">⚪</span> Tối thiểu 10 ký tự (chuẩn NIST SP 800-63B)
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="confirm_password">Xác nhận mật khẩu</label>
+          <div class="password-wrap">
+            <input 
+              type="password" 
+              id="confirm_password" 
+              name="confirm_password" 
+              class="form-input" 
+              placeholder="Nhập lại mật khẩu" 
+              minlength="10"
+              required
+            >
+            <button type="button" class="password-toggle" onclick="togglePassword('confirm_password', this)" title="Hiện/ẩn mật khẩu">👁️</button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width: 100%; padding: 12px; margin-top: 10px; font-weight: 600;">
+          Đăng ký tài khoản
+        </button>
+      </form>
+
+      <div style="margin-top: 20px; text-align: center; font-size: 13px;">
+        <span style="color: var(--text-muted);">Đã có tài khoản?</span>
+        <a href="/dashboard/login" style="color: var(--primary); text-decoration: none; font-weight: 600; margin-left: 4px;">Đăng nhập ngay</a>
+      </div>
+
+      <div class="compliance-footer">
+        <div>Sau khi đăng ký thành công, bạn sẽ được chuyển về màn hình đăng nhập.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function togglePassword(inputId, btn) {
+      const inp = document.getElementById(inputId);
+      if (inp.type === 'password') {
+        inp.type = 'text';
+        btn.textContent = '🙈';
+      } else {
+        inp.type = 'password';
+        btn.textContent = '👁️';
+      }
+    }
+
+    function checkPasswordLength() {
+      const pw = document.getElementById('password').value;
+      const hint = document.getElementById('pw-hint');
+      const icon = document.getElementById('pw-hint-icon');
+      if (pw.length >= 10) {
+        hint.className = 'pw-rules valid';
+        icon.textContent = '🟢';
+      } else {
+        hint.className = 'pw-rules invalid';
+        icon.textContent = '⚪';
+      }
+    }
+
+    function validateRegisterForm() {
+      const pw = document.getElementById('password').value;
+      const cpw = document.getElementById('confirm_password').value;
+      if (pw.length < 10) {
+        alert("Mật khẩu phải có tối thiểu 10 ký tự theo chuẩn an toàn NIST SP 800-63B.");
+        return false;
+      }
+      if (pw !== cpw) {
+        alert("Mật khẩu và xác nhận mật khẩu không khớp nhau.");
+        return false;
+      }
+      return true;
+    }
+  </script>
+</body>
+</html>

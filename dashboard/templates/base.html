@@ -22,6 +22,12 @@
             <span>Tổng quan</span>
           </a>
         </li>
+        <li class="nav-item {% if active_page == 'enroll' %}active{% endif %}">
+          <a href="/dashboard/enroll">
+            <span>🔑</span>
+            <span>Lấy mã cho bé</span>
+          </a>
+        </li>
         <li class="nav-item {% if active_page == 'policy' %}active{% endif %}">
           <a href="/dashboard/policy">
             <span>⚙️</span>
@@ -55,11 +61,12 @@
       </ul>
 
       <div class="sidebar-footer">
-        <div>
-          <strong>{{ current_user.email if current_user else "Phụ huynh" }}</strong>
+        <div style="overflow: hidden; max-width: 150px;">
+          <div style="font-weight: 600; color: var(--text-main); font-size: 13px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden;">{{ current_user.full_name if current_user and current_user.full_name else "Phụ huynh" }}</div>
+          <div style="font-size: 11px; color: var(--text-muted); white-space: nowrap; text-overflow: ellipsis; overflow: hidden;">{{ current_user.email if current_user else "demo@ogk.local" }}</div>
         </div>
-        <form action="/auth/logout" method="post" style="display:inline;">
-          <button type="submit" class="btn btn-sm btn-outline" style="padding: 4px 8px;">Thoát</button>
+        <form action="/dashboard/logout" method="post" style="display:inline; margin-left: 8px;">
+          <button type="submit" class="btn btn-sm btn-outline" style="padding: 4px 8px;" title="Đăng xuất khỏi hệ thống">Thoát</button>
         </form>
       </div>
     </aside>

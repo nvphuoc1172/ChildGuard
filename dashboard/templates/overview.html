@@ -13,6 +13,55 @@
   </div>
 </div>
 
+{% if new_code %}
+<div class="card" style="margin-bottom: 24px; border: 1px solid var(--primary); background: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(30, 41, 59, 0.95) 100%);">
+  <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;">
+    <div>
+      <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; color: #60a5fa; font-size: 16px;">
+        <span>🎉</span>
+        <span>MÃ GHÉP ĐÔI MỚI CHO {{ new_child_name|upper if new_child_name else 'BÉ' }}</span>
+      </div>
+      <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <span>Mã có hiệu lực trong 10 phút (Nghị định 13/2023/NĐ-CP) —</span>
+        <span style="color: #60a5fa; font-weight: 600;">Hiệu lực còn:</span>
+        <span id="overviewNewCodeTimer" style="font-family: monospace; font-size: 14px; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.15); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.3);">
+          {{ "%02d:%02d"|format(new_code_rem_sec // 60, new_code_rem_sec % 60) if new_code_rem_sec else "10:00" }}
+        </span>
+      </p>
+      <div style="display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap;">
+        <div id="codeDisplay" style="font-size: 30px; font-weight: 800; letter-spacing: 5px; color: #38bdf8; background: var(--bg-app); padding: 8px 18px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-family: monospace;">
+          {{ new_code }}
+        </div>
+        <button type="button" class="btn btn-outline btn-sm" onclick="copyCode('{{ new_code }}')">📋 Sao chép mã</button>
+      </div>
+      <div style="margin-top: 16px; font-size: 12px; color: var(--text-muted); background: rgba(15, 23, 42, 0.6); padding: 10px 14px; border-radius: var(--radius-sm);">
+        💻 <strong>Lệnh chạy trên máy của bé (Agent):</strong><br>
+        <code style="color: #6ee7b7; word-break: break-all;">python agent/enroll.py --server 127.0.0.1 --port 8443 --ca-cert certs/ogk-ca.crt --code {{ new_code }}</code>
+      </div>
+    </div>
+    <button type="button" class="btn btn-sm btn-outline" onclick="this.closest('.card').style.display='none'">✕</button>
+  </div>
+</div>
+{% endif %}
+
+{% if active_codes and not new_code %}
+<div class="card" style="margin-bottom: 24px; border: 1px dashed var(--primary); background: rgba(30, 41, 59, 0.4); padding: 14px 18px;">
+  <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+    <div>
+      <span style="font-weight: 600; color: #60a5fa;">🔑 Mã ghép đôi đang chờ máy bé kết nối:</span>
+      {% for ac in active_codes %}
+        <span style="margin-left: 8px; font-family: monospace; font-size: 14px; background: var(--bg-app); padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border-color); color: #38bdf8; font-weight: bold;">{{ ac.code }}</span>
+        <span style="font-size: 12px; color: var(--text-soft);">(Cho {{ ac.child_name }}, còn <span class="overview-active-timer" data-rem-sec="{{ ac.rem_sec }}" style="font-family: monospace; color: #38bdf8; font-weight: 600;">{{ "%02d:%02d"|format(ac.rem_sec // 60, ac.rem_sec % 60) }}</span>)</span>
+      {% endfor %}
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <a href="/dashboard/enroll" class="btn btn-sm btn-outline">🔑 Quản lý mã</a>
+      <button type="button" class="btn btn-sm btn-primary" onclick="openEnrollModal()">+ Tạo mã khác</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% if children_data %}
   {% for c in children_data %}
   <div class="card" style="margin-bottom: 24px;">
@@ -94,10 +143,17 @@
   </div>
   {% endfor %}
 {% else %}
-  <div class="card" style="text-align: center; padding: 40px; color: var(--text-muted);">
-    <div style="font-size: 48px; margin-bottom: 12px;">💻</div>
-    <h3>Chưa có thiết bị nào được ghép đôi</h3>
-    <p style="margin-top: 8px; font-size: 14px;">Hãy tạo mã ghép đôi và nhập trên máy trẻ em (chạy <code>agent/enroll.py</code>).</p>
+  <div class="card" style="text-align: center; padding: 48px 24px; color: var(--text-muted);">
+    <div style="font-size: 52px; margin-bottom: 12px;">💻</div>
+    <h3 style="color: var(--text-main); font-size: 18px;">Chưa có thiết bị nào được ghép đôi</h3>
+    <p style="margin-top: 8px; font-size: 14px; max-width: 500px; margin-left: auto; margin-right: auto;">
+      Hãy tạo mã ghép đôi bên dưới, sau đó nhập mã trên máy tính của bé để bắt đầu đồng hành và bảo vệ.
+    </p>
+    <div style="margin-top: 20px;">
+      <button type="button" class="btn btn-primary" onclick="openEnrollModal()">
+        ➕ Tạo mã ghép đôi cho bé ngay
+      </button>
+    </div>
   </div>
 {% endif %}
 
@@ -144,4 +200,105 @@
     </div>
   {% endif %}
 </div>
+
+<!-- Modal tạo mã ghép đôi mới -->
+<div id="enrollModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 9999; align-items: center; justify-content: center; padding: 20px;">
+  <div class="card" style="max-width: 460px; width: 100%; border: 1px solid var(--border-color); box-shadow: var(--shadow);">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <h3 style="font-size: 18px; font-weight: 700; color: var(--text-main);">➕ Thêm thiết bị cho bé</h3>
+      <button type="button" style="background: none; border: none; color: var(--text-soft); font-size: 20px; cursor: pointer;" onclick="closeEnrollModal()">✕</button>
+    </div>
+    
+    <form action="/dashboard/action/create-code" method="POST">
+      <div class="form-group">
+        <label class="form-label" for="childNameInput">Tên hoặc biệt danh của bé</label>
+        <input type="text" id="childNameInput" name="child_name" class="form-input" placeholder="Ví dụ: Minh An, Bé Bin..." required>
+        <div class="form-help">Mỗi thiết bị máy tính sẽ gắn liền với tài khoản của bé.</div>
+      </div>
+
+      <div style="background: rgba(15, 23, 42, 0.6); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-size: 12px; color: var(--text-muted); margin-bottom: 20px;">
+        🛡️ <strong>Lưu ý quy định an toàn (Nghị định 13/2023/NĐ-CP):</strong><br>
+        Mã ghép đôi sinh ra gồm 8 ký tự, có hiệu lực trong <strong>10 phút</strong>. Khi nhập mã này trên máy bé, máy sẽ tự động tạo cặp token xác thực bảo mật và áp dụng chính sách bảo vệ.
+      </div>
+
+      <div class="btn-group" style="justify-content: flex-end;">
+        <button type="button" class="btn btn-outline" onclick="closeEnrollModal()">Hủy</button>
+        <button type="submit" class="btn btn-primary">Sinh mã ghép đôi ngay</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  function openEnrollModal() {
+    const modal = document.getElementById('enrollModal');
+    modal.style.display = 'flex';
+    setTimeout(() => {
+      const inp = document.getElementById('childNameInput');
+      if (inp) inp.focus();
+    }, 50);
+  }
+
+  function closeEnrollModal() {
+    document.getElementById('enrollModal').style.display = 'none';
+  }
+
+  function copyCode(code) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(code).then(() => {
+        alert("Đã sao chép mã ghép đôi: " + code);
+      });
+    } else {
+      prompt("Sao chép mã ghép đôi này:", code);
+    }
+  }
+
+  // Đóng modal khi bấm ra ngoài
+  window.addEventListener('click', function(e) {
+    const modal = document.getElementById('enrollModal');
+    if (e.target === modal) {
+      modal.style.display = 'none';
+    }
+  });
+
+  // Đếm ngược thời gian còn lại cho mã ghép đôi không cần reload trang
+  (function() {
+    const startTime = Date.now();
+    const newCodeSec = {{ new_code_rem_sec if new_code else 0 }};
+    const hasNewCode = {{ 1 if new_code else 0 }};
+
+    function updateOverviewTimers() {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      if (hasNewCode) {
+        const curSec = Math.max(0, newCodeSec - elapsed);
+        const timerEl = document.getElementById("overviewNewCodeTimer");
+        if (timerEl) {
+          const m = Math.floor(curSec / 60);
+          const s = curSec % 60;
+          timerEl.textContent = (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+          if (curSec <= 0) {
+            timerEl.textContent = "00:00 (Hết hạn)";
+            timerEl.style.color = "#ef4444";
+          }
+        }
+      }
+
+      document.querySelectorAll(".overview-active-timer").forEach(el => {
+        const initSec = parseInt(el.getAttribute("data-rem-sec"), 10) || 0;
+        const curSec = Math.max(0, initSec - elapsed);
+        const m = Math.floor(curSec / 60);
+        const s = curSec % 60;
+        el.textContent = (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+        if (curSec <= 0) {
+          el.textContent = "00:00 (Hết hạn)";
+          el.style.color = "#ef4444";
+        }
+      });
+    }
+
+    if (hasNewCode || document.querySelector(".overview-active-timer")) {
+      setInterval(updateOverviewTimers, 1000);
+    }
+  })();
+</script>
 {% endblock %}
