@@ -12,18 +12,59 @@ Chạy thử:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
+import os
 import signal
 import sys
 import threading
 import time
 from pathlib import Path
 
-from dns_proxy import DNSProxyServer
+from dns_proxy import DNSProxyServer, HostsBlocker
 from enforcer import PolicyEnforcer
 from ipc import IPCServer
 from storage import AgentStorage
 from sync import SyncWorker
+
+
+def is_admin() -> bool:
+    if sys.platform != "win32":
+        return True
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
+def ensure_admin(allow_elevate: bool = True) -> bool:
+    """Kiểm tra quyền Administrator và tự động kích hoạt UAC nếu cần."""
+    if sys.platform != "win32":
+        return True
+    if is_admin():
+        print("[Agent] ✓ Đang chạy với quyền Administrator.")
+        return True
+
+    print("[Agent] ⚠️ Cảnh báo: Agent đang chạy mà KHÔNG có quyền Administrator.")
+    if not allow_elevate:
+        print("[Agent] Chế độ bỏ qua nâng quyền (--no-elevate) được bật.")
+        return False
+
+    print("[Agent] Đang tự động yêu cầu nâng quyền qua Windows UAC để kích hoạt đầy đủ tính năng...")
+    try:
+        params = " ".join([f'"{arg}"' for arg in sys.argv])
+        ret = ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", sys.executable, params, None, 1
+        )
+        if ret > 32:
+            print("[Agent] Đã mở tiến trình Agent với quyền Administrator trong cửa sổ mới.")
+            sys.exit(0)
+        else:
+            print("[Agent] Người dùng đã từ chối cấp quyền UAC. Tiếp tục chạy với quyền hạn chế...")
+            return False
+    except Exception as exc:
+        print(f"[Agent] Không thể gọi UAC: {exc}. Tiếp tục chạy...")
+        return False
 
 
 def load_agent_state(state_path: Path) -> dict:
@@ -41,6 +82,7 @@ def main():
     parser.add_argument("--ca-cert", default="certs/ogk-ca.crt", help="Đường dẫn chứng chỉ CA nội bộ")
     parser.add_argument("--dns-port", type=int, default=53, help="Cổng DNS Proxy (mặc định: 53)")
     parser.add_argument("--ipc-port", type=int, default=48123, help="Cổng IPC Server (mặc định: 48123)")
+    parser.add_argument("--no-elevate", action="store_true", help="Không tự động yêu cầu quyền Administrator qua UAC")
     args = parser.parse_args()
 
     state_file = Path(args.state)
@@ -49,6 +91,10 @@ def main():
     print("=" * 60)
     print("  🛡️  OGK-AGENT (CHILDGUARD) — DỊCH VỤ BẢO VỆ MÁY TRẺ EM")
     print("=" * 60)
+
+    # 0. Kiểm tra quyền Administrator và thiết lập quyền file hosts
+    ensure_admin(allow_elevate=not args.no_elevate)
+    HostsBlocker.setup_permissions()
 
     config = load_agent_state(state_file)
     print(f"[Agent] Thiết bị ID: {config['device_id']}")

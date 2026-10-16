@@ -732,6 +732,10 @@ def policy_page(
 
     quota = json.loads(latest_policy.quota_json) if latest_policy else {"daily_minutes": 120}
     schedule = json.loads(latest_policy.schedule_json) if latest_policy else {"start_time": "07:00", "end_time": "21:30"}
+    if "matrix" not in schedule or not security.validate_or_normalize_matrix(schedule["matrix"]):
+        schedule["matrix"] = security.generate_matrix_from_times(
+            schedule.get("start_time", "00:00"), schedule.get("end_time", "23:30")
+        )
     app_rules = json.loads(latest_policy.app_rules_json) if latest_policy else {"blacklist": []}
     domain_rules = json.loads(latest_policy.domain_rules_json) if latest_policy else {"blacklist": []}
 
@@ -749,6 +753,7 @@ def policy_page(
             "current_policy": latest_policy,
             "quota": quota,
             "schedule": schedule,
+            "schedule_matrix_json": json.dumps(schedule["matrix"]),
             "blocked_apps_text": "\n".join(blocked_apps_list),
             "blocked_domains_text": "\n".join(blocked_domains_list),
             "success_msg": None,
@@ -761,8 +766,9 @@ def save_policy_page(
     request: Request,
     child_id: str = Form(...),
     daily_minutes: int = Form(...),
-    start_time: str = Form(...),
-    end_time: str = Form(...),
+    start_time: str = Form("07:00"),
+    end_time: str = Form("21:30"),
+    schedule_matrix: str = Form(""),
     blocked_apps: str = Form(""),
     blocked_domains: str = Form(""),
     db: Session = Depends(get_db),
@@ -789,6 +795,24 @@ def save_policy_page(
         if d and d not in domain_list:
             domain_list.append(d)
 
+    # Xử lý ma trận lịch tuần 7x48
+    matrix = None
+    if schedule_matrix.strip():
+        try:
+            parsed = json.loads(schedule_matrix)
+            matrix = security.validate_or_normalize_matrix(parsed)
+        except Exception:
+            matrix = None
+
+    if matrix is None:
+        matrix = security.generate_matrix_from_times(start_time, end_time)
+
+    schedule_data = {
+        "start_time": start_time,
+        "end_time": end_time,
+        "matrix": matrix,
+    }
+
     latest = (
         db.query(models.Policy)
         .filter(models.Policy.child_id == child_id)
@@ -802,7 +826,7 @@ def save_policy_page(
         child_id=child_id,
         version=new_version,
         quota_json=json.dumps({"daily_minutes": daily_minutes}),
-        schedule_json=json.dumps({"start_time": start_time, "end_time": end_time}),
+        schedule_json=json.dumps(schedule_data),
         app_rules_json=json.dumps({"mode": "blacklist", "blacklist": app_list}),
         domain_rules_json=json.dumps({"mode": "blacklist", "blacklist": domain_list}),
         created_at=now,
@@ -831,7 +855,8 @@ def save_policy_page(
             "selected_child": child,
             "current_policy": new_policy,
             "quota": {"daily_minutes": daily_minutes},
-            "schedule": {"start_time": start_time, "end_time": end_time},
+            "schedule": schedule_data,
+            "schedule_matrix_json": json.dumps(matrix),
             "blocked_apps_text": "\n".join(app_list),
             "blocked_domains_text": "\n".join(domain_list),
             "success_msg": f"Đã lưu chính sách phiên bản v{new_version} thành công! Máy trẻ em sẽ tự cập nhật khi nhịp tim hoặc nhận lệnh.",

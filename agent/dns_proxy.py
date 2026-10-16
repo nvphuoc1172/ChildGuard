@@ -11,11 +11,16 @@ Chịu trách nhiệm:
 """
 from __future__ import annotations
 
+import base64
+import ctypes
 import os
+import shutil
 import socket
+import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import List, Set, Tuple
@@ -43,16 +48,160 @@ class HostsBlocker:
     """Quản lý file hosts của Windows để chặn tên miền cấp hệ điều hành (không thể bypass qua DNS dự phòng hay DoH)."""
 
     @staticmethod
+    def is_admin() -> bool:
+        """Kiểm tra quyền Administrator của tiến trình hiện tại trên Windows."""
+        if sys.platform != "win32":
+            return os.geteuid() == 0 if hasattr(os, "geteuid") else True
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except Exception:
+            return False
+
+    @staticmethod
     def get_hosts_path() -> Path:
         system_root = os.environ.get("SystemRoot", r"C:\Windows")
         return Path(system_root) / "System32" / "drivers" / "etc" / "hosts"
 
     @classmethod
-    def apply_blacklist(cls, raw_domains: List[str]) -> bool:
+    def setup_permissions(cls, hosts_path: Path | None = None) -> bool:
+        """Cấp quyền sửa đổi (Modify) file hosts cho nhóm Users (*S-1-5-32-545) khi có quyền Admin.
+
+        Việc này giúp các lần ghi sau (kể cả khi tiến trình chạy dưới quyền User thông thường)
+        có thể ghi đè file hosts mà không cần quyền Administrator hay hiển thị UAC prompt.
+        """
         if sys.platform != "win32":
             return True
+        if hosts_path is None:
+            hosts_path = cls.get_hosts_path()
+        if not hosts_path.exists():
+            return False
+        if not cls.is_admin():
+            return False
 
-        hosts_path = cls.get_hosts_path()
+        try:
+            # Gỡ thuộc tính chỉ đọc (Read-only)
+            os.chmod(hosts_path, stat.S_IWRITE | stat.S_IREAD)
+            try:
+                ctypes.windll.kernel32.SetFileAttributesW(str(hosts_path), 0x80)  # FILE_ATTRIBUTE_NORMAL
+            except Exception:
+                pass
+
+            # Cấp quyền Modify (M) cho nhóm Users (*S-1-5-32-545 là SID cố định cho BUILTIN\Users)
+            cmd = f'icacls "{hosts_path}" /grant "*S-1-5-32-545:(M)" /c'
+            res = subprocess.run(cmd, shell=True, capture_output=True, timeout=5)
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    @classmethod
+    def _flush_dns(cls):
+        """Xóa cache DNS của Windows để áp dụng ngay lập tức."""
+        if sys.platform == "win32":
+            try:
+                subprocess.run("ipconfig /flushdns", shell=True, capture_output=True, timeout=5)
+            except Exception:
+                pass
+
+    @classmethod
+    def _elevated_write_windows(cls, hosts_path: Path, content: str) -> bool:
+        """Ghi file hosts bằng cách kích hoạt UAC thông qua PowerShell Start-Process -Verb RunAs.
+
+        Đồng thời cấp quyền Modify cho nhóm Users (*S-1-5-32-545) để lần sau không cần UAC lại.
+        """
+        temp_file = None
+        try:
+            temp_fd, temp_path = tempfile.mkstemp(prefix="ogk_hosts_", suffix=".tmp", text=True)
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                f.write(content)
+            temp_file = Path(temp_path)
+
+            ps_bin = shutil.which("powershell") or r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+
+            # Script PowerShell chạy dưới quyền Administrator
+            ps_script = (
+                "$ErrorActionPreference = 'Stop'\n"
+                f"$src = @'\n{temp_file}\n'@\n"
+                f"$dst = @'\n{hosts_path}\n'@\n"
+                "if (Test-Path $dst) {\n"
+                "    Set-ItemProperty -Path $dst -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue\n"
+                "    attrib -r $dst\n"
+                "}\n"
+                "Copy-Item -Path $src -Destination $dst -Force\n"
+                '& icacls.exe $dst /grant "*S-1-5-32-545:(M)" /c | Out-Null\n'
+                "ipconfig /flushdns | Out-Null\n"
+            )
+            encoded_script = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
+
+            elevate_cmd = (
+                f'Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden '
+                f'-ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded_script}"'
+            )
+
+            res = subprocess.run(
+                [ps_bin, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", elevate_cmd],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if res.returncode == 0:
+                print("[Hosts Blocker] ✓ Đã ghi file hosts và cấp quyền Modify cho Users qua UAC thành công.")
+                return True
+            else:
+                err_msg = res.stderr.strip() if res.stderr else f"Exit code {res.returncode}"
+                print(f"[Hosts Blocker] Cảnh báo lỗi cập nhật file hosts (cần quyền Admin): UAC thất bại ({err_msg})")
+                return False
+        except subprocess.TimeoutExpired:
+            print("[Hosts Blocker] Cảnh báo: Quá thời gian chờ xác nhận quyền Administrator (UAC timeout).")
+            return False
+        except Exception as e:
+            print(f"[Hosts Blocker] Cảnh báo lỗi cập nhật file hosts (cần quyền Admin): {e}")
+            return False
+        finally:
+            if temp_file and temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception:
+                    pass
+
+    @classmethod
+    def _write_hosts(cls, hosts_path: Path, content: str) -> bool:
+        """Ghi nội dung vào file hosts với cơ chế đa tầng xử lý quyền."""
+        # 1. Gỡ thuộc tính Read-only nếu có
+        try:
+            if hosts_path.exists():
+                os.chmod(hosts_path, stat.S_IWRITE | stat.S_IREAD)
+                if sys.platform == "win32":
+                    try:
+                        ctypes.windll.kernel32.SetFileAttributesW(str(hosts_path), 0x80)  # FILE_ATTRIBUTE_NORMAL
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # 2. Thử ghi trực tiếp (thành công nếu có quyền Admin hoặc file đã được cấp Modify cho Users)
+        try:
+            hosts_path.write_text(content, encoding="utf-8")
+            cls.setup_permissions(hosts_path)
+            cls._flush_dns()
+            return True
+        except (PermissionError, OSError):
+            pass
+
+        # 3. Fallback trên Windows: Nâng quyền ghi qua UAC
+        if sys.platform == "win32":
+            print("[Hosts Blocker] Tiến trình chưa có quyền ghi file hosts. Đang yêu cầu nâng quyền Administrator...")
+            return cls._elevated_write_windows(hosts_path, content)
+
+        return False
+
+    @classmethod
+    def apply_blacklist(cls, raw_domains: List[str], hosts_path: Path | None = None) -> bool:
+        if hosts_path is None:
+            if sys.platform != "win32":
+                return True
+            hosts_path = cls.get_hosts_path()
+
         try:
             content = ""
             if hosts_path.exists():
@@ -92,22 +241,27 @@ class HostsBlocker:
                 new_block_lines.append(TAG_END)
 
             if new_block_lines:
-                final_content = content.rstrip() + "\n\n" + "\n".join(new_block_lines) + "\n"
+                if content.strip():
+                    final_content = content.rstrip() + "\n\n" + "\n".join(new_block_lines) + "\n"
+                else:
+                    final_content = "\n".join(new_block_lines) + "\n"
             else:
-                final_content = content.rstrip() + "\n"
+                final_content = (content.rstrip() + "\n") if content.strip() else ""
 
-            hosts_path.write_text(final_content, encoding="utf-8")
-            # Xóa cache DNS của Windows để áp dụng tức thì
-            subprocess.run("ipconfig /flushdns", shell=True, capture_output=True)
-            print(f"[Hosts Blocker] ✓ Đã đồng bộ {len(raw_domains)} tên miền cấm vào file hosts.")
-            return True
+            success = cls._write_hosts(hosts_path, final_content)
+            if success:
+                print(f"[Hosts Blocker] ✓ Đã đồng bộ {len(raw_domains)} tên miền cấm vào file hosts.")
+                return True
+            else:
+                print(f"[Hosts Blocker] Cảnh báo lỗi cập nhật file hosts (cần quyền Admin): Không có quyền ghi vào {hosts_path}")
+                return False
         except Exception as e:
             print(f"[Hosts Blocker] Cảnh báo lỗi cập nhật file hosts (cần quyền Admin): {e}")
             return False
 
     @classmethod
-    def clear(cls) -> bool:
-        return cls.apply_blacklist([])
+    def clear(cls, hosts_path: Path | None = None) -> bool:
+        return cls.apply_blacklist([], hosts_path=hosts_path)
 
 
 def parse_dns_domain(data: bytes) -> Tuple[str, int]:
@@ -277,3 +431,30 @@ class DNSProxyServer:
         # Dọn dẹp sạch file hosts khi dừng agent
         HostsBlocker.clear()
         print("[DNS Proxy] Đã khôi phục file hosts về trạng thái ban đầu.")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ChildGuard DNS Proxy & Windows Hosts Helper")
+    parser.add_argument("--setup-hosts", action="store_true", help="Cấp quyền ghi file hosts cho Users (yêu cầu Admin hoặc UAC)")
+    parser.add_argument("--test-block", nargs="+", help="Thử chặn danh sách tên miền vào file hosts")
+    parser.add_argument("--clear-hosts", action="store_true", help="Xóa các quy tắc chặn của ChildGuard trong file hosts")
+    cli_args = parser.parse_args()
+
+    if cli_args.setup_hosts:
+        if not HostsBlocker.is_admin():
+            print("[Hosts Blocker] Đang yêu cầu quyền Administrator qua UAC để cấp quyền file hosts...")
+            hosts_p = HostsBlocker.get_hosts_path()
+            current_c = hosts_p.read_text(encoding="utf-8", errors="ignore") if hosts_p.exists() else ""
+            ok = HostsBlocker._elevated_write_windows(hosts_p, current_c)
+        else:
+            ok = HostsBlocker.setup_permissions()
+        if ok:
+            print("✓ Đã thiết lập quyền ghi file hosts cho nhóm Users thành công.")
+        else:
+            print("❌ Không thể thiết lập quyền file hosts.")
+    elif cli_args.test_block:
+        HostsBlocker.apply_blacklist(cli_args.test_block)
+    elif cli_args.clear_hosts:
+        HostsBlocker.clear()

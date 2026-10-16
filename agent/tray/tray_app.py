@@ -12,6 +12,7 @@ import json
 import threading
 import time
 import urllib.request
+from datetime import datetime
 from typing import Optional
 
 try:
@@ -115,11 +116,22 @@ class TrayApp:
                 is_locked = st.get("is_locked", False)
                 lock_tag = " (🔒 Đang khóa)" if is_locked else " (🟢 Đang dùng)"
 
+                matrix = sch.get("matrix")
+                if matrix and isinstance(matrix, list) and len(matrix) == 7:
+                    now_dt = datetime.now()
+                    day = now_dt.weekday()
+                    slot = now_dt.hour * 2 + (now_dt.minute // 30)
+                    slot_allowed = bool(matrix[day][slot]) if (0 <= day < 7 and 0 <= slot < 48) else True
+                    status_text = "🟢 Trong giờ cho phép" if slot_allowed else "🔒 Ngoài khung giờ (Khóa trong 5s)"
+                    schedule_text = f"📅 Lịch tuần 7x48: {status_text}\n"
+                else:
+                    schedule_text = f"📅 Khung giờ cho phép: {sch.get('start_time', '07:00')} đến {sch.get('end_time', '21:30')}\n"
+
                 info_var.set(
                     f"⏱️ Hạn mức mỗi ngày: {d_quota} phút\n"
                     f"⏳ Đã sử dụng hôm nay: {u_min} phút\n"
                     f"🟢 Thời gian còn lại: {r_min} phút{lock_tag}\n\n"
-                    f"📅 Khung giờ cho phép: {sch.get('start_time', '07:00')} đến {sch.get('end_time', '21:30')}\n\n"
+                    f"{schedule_text}\n"
                     f"🚫 Ứng dụng bị hạn chế:\n"
                     f"  {', '.join(ar.get('blacklist', [])) or 'Không có'}\n\n"
                     f"🌐 Website bị hạn chế:\n"

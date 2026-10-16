@@ -18,7 +18,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 from storage import AgentStorage
 
@@ -31,21 +34,38 @@ class PolicyEnforcer:
         self._lock = threading.Lock()
         self._last_tick_time = time.time()
         self._screen_time_buffer = 0
+        self._last_lock_time = 0.0
 
-    def lock_workstation(self, manual: bool = False):
+    @staticmethod
+    def is_workstation_locked() -> bool:
+        """Kiểm tra màn hình Windows có đang bị khóa hay không."""
+        if sys.platform != "win32":
+            return False
+        try:
+            desk = ctypes.windll.user32.OpenInputDesktop(0, False, 0x0100)  # DESKTOP_SWITCHDESKTOP
+            if desk:
+                ctypes.windll.user32.CloseDesktop(desk)
+                return False  # Màn hình đang mở, người dùng đang ở Desktop
+            return True  # Màn hình đang ở chế độ Lock Screen / Winlogon
+        except Exception:
+            return False
+
+    def lock_workstation(self, manual: bool = False, reason: str = ""):
         """Khóa màn hình máy tính Windows."""
         if manual:
             self.manual_locked = True
         self.storage.set_lock_status(True)
+        self._last_lock_time = time.time()
 
+        prefix = f" [{reason}]" if reason else ""
         if sys.platform == "win32":
             try:
-                print("[Enforcer] 🔒 ĐANG THỰC HIỆN KHÓA MÁY (LockWorkStation)...")
+                print(f"[Enforcer] 🔒 ĐANG THỰC HIỆN KHÓA MÁY (LockWorkStation)...{prefix}")
                 ctypes.windll.user32.LockWorkStation()
             except Exception as e:
                 print(f"[Enforcer] Lỗi gọi LockWorkStation: {e}")
         else:
-            print("[Enforcer] 🔒 Giả lập khóa màn hình (không phải Windows)")
+            print(f"[Enforcer] 🔒 Giả lập khóa màn hình (không phải Windows){prefix}")
 
     def unlock_workstation(self):
         """Mở khóa máy (cho phép tiếp tục dùng)."""
@@ -63,16 +83,36 @@ class PolicyEnforcer:
             conn.execute("UPDATE agent_state SET quota_used_seconds = ?, is_locked = 0 WHERE id = 1", (reduced_used,))
             conn.commit()
 
-    def check_schedule(self, schedule: dict) -> bool:
-        """Kiểm tra thời gian hiện tại có nằm trong khung giờ cho phép hay không."""
+    def check_schedule(self, schedule: dict, now_dt: datetime | None = None) -> bool:
+        """Kiểm tra thời gian hiện tại có nằm trong khung giờ cho phép hay không.
+
+        Hỗ trợ:
+        1. Ma trận lịch tuần 7x48 (độ phân giải 30 phút, Thứ Hai = 0 .. Chủ Nhật = 6, 48 ô/ngày).
+        2. Khung giờ start_time - end_time (fallback tương thích ngược).
+        """
         if not schedule:
             return True
+
+        if now_dt is None:
+            now_dt = datetime.now()
+
+        # 1. Kiểm tra ma trận lịch tuần 7x48 (độ phân giải 30 phút)
+        matrix = schedule.get("matrix")
+        if matrix and isinstance(matrix, list) and len(matrix) == 7:
+            day = now_dt.weekday()  # 0 = Thứ Hai, ..., 6 = Chủ Nhật
+            slot = now_dt.hour * 2 + (now_dt.minute // 30)  # 0 đến 47 (30 phút / ô)
+            if 0 <= day < 7 and 0 <= slot < 48:
+                day_slots = matrix[day]
+                if isinstance(day_slots, list) and len(day_slots) == 48:
+                    return bool(day_slots[slot])
+
+        # 2. Fallback tương thích ngược: start_time / end_time
         start_str = schedule.get("start_time")
         end_str = schedule.get("end_time")
         if not start_str or not end_str:
             return True
         try:
-            now_time = datetime.now().strftime("%H:%M")
+            now_time = now_dt.strftime("%H:%M")
             if start_str <= end_str:
                 return start_str <= now_time <= end_str
             else:
@@ -91,7 +131,7 @@ class PolicyEnforcer:
         else:
             raw_blacklist = []
 
-        if not raw_blacklist:
+        if not raw_blacklist or psutil is None:
             return
 
         cleaned_blacklist = set()
@@ -158,24 +198,40 @@ class PolicyEnforcer:
 
                 if should_lock:
                     is_already_locked = self.storage.get_lock_status()
+                    if self.manual_locked:
+                        lock_reason = "Khóa theo lệnh phụ huynh"
+                    elif quota_exceeded:
+                        lock_reason = f"Đã hết hạn mức ngày ({used_seconds}/{daily_limit_sec}s)"
+                    else:
+                        day_names = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
+                        now_dt = datetime.now()
+                        lock_reason = f"Ngoài khung giờ cho phép ({day_names[now_dt.weekday()]} lúc {now_dt.strftime('%H:%M')} - Lịch tuần 7x48) -> Khóa máy trong 5s"
+
+                    # Kiểm tra hành động khóa:
+                    # - Nếu chưa ở trạng thái khóa: khóa ngay lập tức!
+                    # - Nếu đã từng khóa nhưng màn hình đang mở (trẻ đăng nhập lại),
+                    #   hoặc đã quá 5 giây kể từ lần khóa trước: khóa lại ngay (đảm bảo trong 5s)!
+                    needs_lock_action = False
                     if not is_already_locked:
-                        if self.manual_locked:
-                            print("[Enforcer] 🔒 KHÓA MÁY THEO LỆNH PHỤ HUYNH!")
-                        elif quota_exceeded:
-                            print(f"[Enforcer] 🔒 ĐÃ HẾT HẠN MỨC NGÀY ({used_seconds}/{daily_limit_sec}s) -> KHÓA MÁY!")
-                        elif not in_schedule:
-                            s_start = schedule.get("start_time", "07:00")
-                            s_end = schedule.get("end_time", "21:30")
-                            print(f"[Enforcer] 🔒 NGOÀI KHUNG GIỜ CHO PHÉP DÙNG MÁY ({s_start} - {s_end}) -> KHÓA MÁY!")
-                        self.lock_workstation()
+                        needs_lock_action = True
+                    else:
+                        time_since_last_lock = now - self._last_lock_time
+                        workstation_unlocked = not self.is_workstation_locked()
+                        if workstation_unlocked or time_since_last_lock >= 5.0:
+                            needs_lock_action = True
+
+                    if needs_lock_action:
+                        self.lock_workstation(reason=lock_reason)
                 else:
                     # Đang trong hạn mức và trong khung giờ hợp lệ -> Nếu trước đó từng bị khóa thì mở lại
                     if self.storage.get_lock_status():
                         print("[Enforcer] 🔓 Đủ điều kiện sử dụng máy -> Giải phóng trạng thái khóa.")
                         self.storage.set_lock_status(False)
 
-                    # 3. Đếm thời gian sử dụng màn hình (khi máy không bị khóa bởi chính sách)
-                    if elapsed > 0:
+                    # 3. Đếm thời gian sử dụng màn hình (khi máy không bị khóa)
+                    # Nếu màn hình đang khóa (Lock Screen), không đếm thời gian
+                    workstation_locked = self.is_workstation_locked()
+                    if not workstation_locked and elapsed > 0:
                         used_seconds = self.storage.add_screen_time(elapsed)
                         self._screen_time_buffer += elapsed
 
@@ -193,7 +249,7 @@ class PolicyEnforcer:
                         # Kiểm tra lại ngay sau khi cộng: nếu vừa chạm mốc hạn mức thì khóa ngay
                         if used_seconds >= daily_limit_sec:
                             print(f"[Enforcer] 🔒 VỪA HẾT HẠN MỨC NGÀY ({used_seconds}/{daily_limit_sec}s) -> KHÓA MÁY!")
-                            self.lock_workstation()
+                            self.lock_workstation(reason="Hết hạn mức ngày")
 
             except Exception as e:
                 print(f"[Enforcer] Lỗi trong vòng lặp enforcer: {e}")

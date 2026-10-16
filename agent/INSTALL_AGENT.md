@@ -56,6 +56,14 @@ Lệnh chạy dịch vụ (mở PowerShell với quyền Administrator):
 ```powershell
 python run_agent.py --ca-cert certs\ogk-ca.crt
 ```
+> **Lưu ý về quyền Administrator & File Hosts**:
+> - `run_agent.py` sẽ tự động kiểm tra và yêu cầu cấp quyền Administrator qua Windows UAC nếu chưa có.
+> - Khi chạy với quyền Administrator, Agent sẽ tự động cấp quyền sửa đổi (Modify) file `hosts` cho nhóm `Users` (`icacls *S-1-5-32-545:(M)`). Nhờ đó, các lần cập nhật chính sách tiếp theo hoặc khi tiến trình chạy dưới quyền người dùng thông thường đều có thể ghi trực tiếp vào file hosts mà không gặp lỗi phân quyền hay cần xác nhận UAC lặp lại.
+> - Bạn cũng có thể chủ động cấp quyền trước cho file hosts bằng lệnh (chạy 1 lần trong PowerShell Admin):
+>   ```powershell
+>   python dns_proxy.py --setup-hosts
+>   ```
+> - Nếu chạy Agent với cờ `--no-elevate`, khi cần cập nhật file hosts, Agent sẽ tự động kích hoạt hộp thoại UAC để ghi nội dung và cấp quyền mà không làm gián đoạn tiến trình.
 
 ---
 

@@ -46,6 +46,40 @@ def refresh_token_expiry(now: datetime | None = None) -> datetime:
     return now + timedelta(days=REFRESH_TOKEN_TTL_DAYS)
 
 
+def generate_matrix_from_times(start_time: str = "07:00", end_time: str = "21:30") -> list[list[int]]:
+    """Tạo ma trận 7x48 mặc định từ start_time và end_time (độ phân giải 30 phút)."""
+    try:
+        sh, sm = map(int, start_time.split(":"))
+        eh, em = map(int, end_time.split(":"))
+        start_slot = sh * 2 + (1 if sm >= 30 else 0)
+        end_slot = eh * 2 + (1 if em >= 30 else 0)
+    except Exception:
+        start_slot = 14  # 07:00
+        end_slot = 43    # 21:30
+
+    row = []
+    for slot in range(48):
+        if start_slot <= end_slot:
+            allowed = 1 if (start_slot <= slot < end_slot) else 0
+        else:
+            allowed = 1 if (slot >= start_slot or slot < end_slot) else 0
+        row.append(allowed)
+
+    return [list(row) for _ in range(7)]
+
+
+def validate_or_normalize_matrix(raw: any) -> list[list[int]] | None:
+    """Kiểm tra và chuẩn hóa ma trận 7x48 (chỉ chứa 0 và 1)."""
+    if not isinstance(raw, list) or len(raw) != 7:
+        return None
+    matrix = []
+    for row in raw:
+        if not isinstance(row, list) or len(row) != 48:
+            return None
+        matrix.append([1 if bool(cell) else 0 for cell in row])
+    return matrix
+
+
 def default_policy_payload() -> dict:
     """Chính sách mặc định khi một trẻ chưa từng có policy nào —
     an toàn-trước (quota thấp, không whitelist ứng dụng/domain nào),

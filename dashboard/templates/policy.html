@@ -40,15 +40,46 @@
     </div>
 
     <div class="form-group">
-      <label class="form-label">Khung giờ cho phép sử dụng trong ngày</label>
-      <div style="display: flex; gap: 12px; align-items: center;">
-        <input type="time" name="start_time" class="form-input" style="max-width: 160px;"
-               value="{{ schedule.get('start_time', '07:00') }}">
-        <span>đến</span>
-        <input type="time" name="end_time" class="form-input" style="max-width: 160px;"
-               value="{{ schedule.get('end_time', '21:30') }}">
+      <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+        <div>
+          <label class="form-label" style="margin-bottom: 2px;">Lịch tuần cho phép sử dụng (Ma trận 7 ngày × 48 khung giờ 30 phút)</label>
+          <div class="form-help">
+            Nhấp hoặc kéo chuột trên các ô để đổi trạng thái <b>Cho phép</b> (Xanh lá) hoặc <b>Khóa</b> (Xám). Ngoài khung giờ cho phép, <b>máy tính của trẻ sẽ bị khóa trong vòng 5 giây</b>.
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center; font-size: 13px;">
+          <span style="display: inline-flex; align-items: center; gap: 4px;">
+            <span style="width: 12px; height: 12px; background: #10b981; border-radius: 2px; display: inline-block;"></span> Cho phép
+          </span>
+          <span style="display: inline-flex; align-items: center; gap: 4px;">
+            <span style="width: 12px; height: 12px; background: #334155; border-radius: 2px; display: inline-block;"></span> Khóa (trong 5s)
+          </span>
+        </div>
       </div>
-      <div class="form-help">Ngoài khung giờ này, máy tính trẻ sẽ bị hạn chế hoặc khóa đăng nhập.</div>
+
+      <!-- Quick Preset Controls -->
+      <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center;">
+        <span style="font-size: 12px; color: var(--text-muted);">Mẫu nhanh:</span>
+        <button type="button" class="btn btn-sm btn-outline" onclick="applyPreset('all')">🟢 Cho phép 24/7</button>
+        <button type="button" class="btn btn-sm btn-outline" onclick="applyPreset('lock_all')">🔒 Khóa tất cả</button>
+        <button type="button" class="btn btn-sm btn-outline" onclick="applyPreset('school')">🏫 Giờ chuẩn (07:00 - 21:30)</button>
+        <button type="button" class="btn btn-sm btn-outline" onclick="applyPreset('weekend_only')">🎮 Học & Cuối tuần</button>
+        <span id="matrixStats" style="margin-left: auto; font-size: 12px; color: var(--text-main); font-weight: 500;">
+          Đang tính...
+        </span>
+      </div>
+
+      <!-- Interactive 7x48 Matrix Grid -->
+      <div style="overflow-x: auto; background: #0f172a; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 12px; user-select: none;">
+        <div id="scheduleMatrixGrid" style="display: inline-block; min-width: 820px;">
+          <!-- Rendered by JavaScript -->
+        </div>
+      </div>
+
+      <!-- Hidden inputs for form submit -->
+      <input type="hidden" name="schedule_matrix" id="scheduleMatrixInput" value='{{ schedule_matrix_json }}'>
+      <input type="hidden" name="start_time" id="startTimeInput" value="{{ schedule.get('start_time', '07:00') }}">
+      <input type="hidden" name="end_time" id="endTimeInput" value="{{ schedule.get('end_time', '21:30') }}">
     </div>
 
     <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">
@@ -76,4 +107,195 @@
     </div>
   </form>
 </div>
+
+<script>
+(function() {
+  const DAYS = [
+    { id: 0, name: "Thứ Hai", short: "T2" },
+    { id: 1, name: "Thứ Ba", short: "T3" },
+    { id: 2, name: "Thứ Tư", short: "T4" },
+    { id: 3, name: "Thứ Năm", short: "T5" },
+    { id: 4, name: "Thứ Sáu", short: "T6" },
+    { id: 5, name: "Thứ Bảy", short: "T7" },
+    { id: 6, name: "Chủ Nhật", short: "CN" }
+  ];
+
+  const matrixInput = document.getElementById("scheduleMatrixInput");
+  const statsEl = document.getElementById("matrixStats");
+  const gridEl = document.getElementById("scheduleMatrixGrid");
+
+  let matrix = [];
+  try {
+    matrix = JSON.parse(matrixInput.value);
+  } catch (e) {
+    matrix = [];
+  }
+
+  // Khởi tạo ma trận 7x48 nếu chưa có hoặc không hợp lệ
+  if (!Array.isArray(matrix) || matrix.length !== 7) {
+    matrix = [];
+    for (let d = 0; d < 7; d++) {
+      let row = [];
+      for (let s = 0; s < 48; s++) {
+        // Mặc định từ 07:00 đến 21:30 (slot 14 đến 42)
+        row.push(s >= 14 && s < 43 ? 1 : 0);
+      }
+      matrix.push(row);
+    }
+  }
+
+  let isMouseDown = false;
+  let targetValue = 1;
+
+  document.addEventListener("mouseup", () => {
+    isMouseDown = false;
+  });
+
+  function slotToTimeStr(slot) {
+    const h1 = Math.floor(slot / 2);
+    const m1 = (slot % 2 === 1) ? "30" : "00";
+    const nextSlot = slot + 1;
+    const h2 = Math.floor(nextSlot / 2);
+    const m2 = (nextSlot % 2 === 1) ? "30" : "00";
+    const h1Str = String(h1).padStart(2, "0");
+    const h2Str = String(h2).padStart(2, "0");
+    return `${h1Str}:${m1} - ${h2Str}:${m2}`;
+  }
+
+  function updateStats() {
+    let allowedCount = 0;
+    for (let d = 0; d < 7; d++) {
+      for (let s = 0; s < 48; s++) {
+        if (matrix[d][s]) allowedCount++;
+      }
+    }
+    const hours = (allowedCount * 0.5).toFixed(1);
+    statsEl.innerHTML = `Cho phép: <b>${hours} giờ/tuần</b> (${allowedCount}/336 khung giờ)`;
+    matrixInput.value = JSON.stringify(matrix);
+  }
+
+  function setCell(d, s, val) {
+    matrix[d][s] = val;
+    const cellEl = document.querySelector(`.matrix-cell[data-day="${d}"][data-slot="${s}"]`);
+    if (cellEl) {
+      if (val === 1) {
+        cellEl.style.backgroundColor = "#10b981";
+        cellEl.style.borderColor = "#059669";
+        cellEl.title = `${DAYS[d].name} ${slotToTimeStr(s)}: Cho phép`;
+      } else {
+        cellEl.style.backgroundColor = "#334155";
+        cellEl.style.borderColor = "#1e293b";
+        cellEl.title = `${DAYS[d].name} ${slotToTimeStr(s)}: Khóa (trong 5s)`;
+      }
+    }
+  }
+
+  window.applyPreset = function(preset) {
+    for (let d = 0; d < 7; d++) {
+      for (let s = 0; s < 48; s++) {
+        if (preset === 'all') {
+          setCell(d, s, 1);
+        } else if (preset === 'lock_all') {
+          setCell(d, s, 0);
+        } else if (preset === 'school') {
+          setCell(d, s, (s >= 14 && s < 43) ? 1 : 0);
+        } else if (preset === 'weekend_only') {
+          if (d >= 0 && d <= 4) {
+            setCell(d, s, (s >= 36 && s < 43) ? 1 : 0); // 18:00 - 21:30
+          } else {
+            setCell(d, s, (s >= 16 && s < 43) ? 1 : 0); // 08:00 - 21:30
+          }
+        }
+      }
+    }
+    updateStats();
+  };
+
+  window.toggleDay = function(d) {
+    const currentOn = matrix[d].filter(x => x === 1).length;
+    const newVal = currentOn > 24 ? 0 : 1;
+    for (let s = 0; s < 48; s++) {
+      setCell(d, s, newVal);
+    }
+    updateStats();
+  };
+
+  window.toggleHour = function(h) {
+    const s1 = h * 2;
+    const s2 = s1 + 1;
+    let countOn = 0;
+    for (let d = 0; d < 7; d++) {
+      if (matrix[d][s1]) countOn++;
+      if (matrix[d][s2]) countOn++;
+    }
+    const newVal = countOn > 7 ? 0 : 1;
+    for (let d = 0; d < 7; d++) {
+      setCell(d, s1, newVal);
+      setCell(d, s2, newVal);
+    }
+    updateStats();
+  };
+
+  function renderGrid() {
+    let html = `<div style="display: flex; flex-direction: column; gap: 2px;">`;
+
+    // Hour header row
+    html += `<div style="display: flex; align-items: center; margin-bottom: 4px;">`;
+    html += `<div style="width: 80px; font-size: 11px; color: var(--text-muted); font-weight: 600;">Giờ (24h)</div>`;
+    for (let h = 0; h < 24; h++) {
+      const hStr = String(h).padStart(2, '0');
+      html += `<div onclick="toggleHour(${h})" title="Bấm để đổi khung giờ ${hStr}:00 cho cả tuần" style="width: 30px; text-align: center; font-size: 10px; color: var(--text-muted); cursor: pointer; user-select: none; font-weight: 500;">${hStr}</div>`;
+    }
+    html += `</div>`;
+
+    // 7 Day rows
+    for (let d = 0; d < 7; d++) {
+      const day = DAYS[d];
+      html += `<div style="display: flex; align-items: center;">`;
+      html += `<div onclick="toggleDay(${d})" title="Bấm để đổi cả ngày ${day.name}" style="width: 80px; font-size: 12px; font-weight: 600; color: ${d >= 5 ? '#f59e0b' : 'var(--text-main)'}; cursor: pointer; user-select: none;">${day.short} <span style="font-weight: 400; font-size: 11px; color: var(--text-muted);">(${day.name})</span></div>`;
+
+      html += `<div style="display: flex; gap: 1px;">`;
+      for (let s = 0; s < 48; s++) {
+        const val = matrix[d][s];
+        const bg = val === 1 ? '#10b981' : '#334155';
+        const border = val === 1 ? '#059669' : '#1e293b';
+        const title = `${day.name} ${slotToTimeStr(s)}: ${val === 1 ? 'Cho phép' : 'Khóa (trong 5s)'}`;
+        const isHourStart = (s % 2 === 0);
+        html += `<div class="matrix-cell" data-day="${d}" data-slot="${s}" title="${title}" style="width: 14px; height: 22px; background-color: ${bg}; border: 1px solid ${border}; border-radius: 2px; cursor: pointer; ${isHourStart && s > 0 ? 'margin-left: 2px;' : ''}"></div>`;
+      }
+      html += `</div>`;
+      html += `</div>`;
+    }
+
+    html += `</div>`;
+    gridEl.innerHTML = html;
+
+    // Bắt sự kiện kéo chuột (drag) và nhấp chuột (click)
+    const cells = gridEl.querySelectorAll('.matrix-cell');
+    cells.forEach(cell => {
+      const d = parseInt(cell.getAttribute('data-day'));
+      const s = parseInt(cell.getAttribute('data-slot'));
+
+      cell.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        isMouseDown = true;
+        targetValue = matrix[d][s] === 1 ? 0 : 1;
+        setCell(d, s, targetValue);
+        updateStats();
+      });
+
+      cell.addEventListener('mouseenter', () => {
+        if (isMouseDown) {
+          setCell(d, s, targetValue);
+          updateStats();
+        }
+      });
+    });
+
+    updateStats();
+  }
+
+  renderGrid();
+})();
+</script>
 {% endblock %}

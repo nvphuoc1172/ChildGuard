@@ -462,8 +462,14 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
   - **Lệch cấu trúc bản ghi DNS (Record Type Mismatch)**: Trình duyệt Edge/Chrome gửi đồng thời câu hỏi IPv4 (Type 1 - A), IPv6 (Type 28 - AAAA) và HTTPS SVCB (Type 65). Code cũ trả về gói phản hồi cứng là Type A (`0.0.0.0`) cho mọi loại câu hỏi, khiến Windows đánh giá gói tin phản hồi bị lỗi định dạng (corrupt).
   - **Multi-Homed DNS Fallback của Windows**: Khi câu trả lời từ `127.0.0.1:53` bị coi là lỗi, Windows DNS Client lập tức fallback gửi truy vấn sang DNS phụ của card mạng (gateway VirtualBox hoặc router), nhận về IP thật và mở web bình thường.
   - **Trình duyệt bật DoH (DNS-over-HTTPS)**: Edge/Chrome tự ý gửi truy vấn HTTPS mã hóa ra ngoài, bỏ qua DNS cục bộ của máy tính.
+  - **Lỗi không ghi được vào file hosts do thiếu quyền Administrator**: File `C:\Windows\System32\drivers\etc\hosts` được bảo vệ nghiêm ngặt bởi Windows ACL (chỉ Administrators mới có quyền ghi) và thường bị đặt cờ `ReadOnly`. Khi Agent chạy dưới quyền user thông thường hoặc chưa nâng quyền UAC, hàm ghi file gặp `PermissionError: [Errno 13] Permission denied`.
 - **Cách sửa & Cải tiến Kiến trúc 2 lớp**:
   1. **Lớp 1 - Windows Hosts Blocker (Chặn cấp hệ điều hành không thể bypass)**: Xây dựng class `HostsBlocker` trong `agent/dns_proxy.py`. Tự động đồng bộ danh sách cấm trực tiếp vào tệp hệ thống `C:\Windows\System32\drivers\etc\hosts` cho cả IPv4 (`0.0.0.0`) và IPv6 (`::`), mở rộng cho cả `www.` và tên miền gốc. File hosts có độ ưu tiên cao nhất trong hệ điều hành Windows, chặn đứng mọi trình duyệt mà không cần can thiệp card mạng thủ công. Khi Agent dừng, tự động khôi phục file hosts về nguyên trạng.
+     - **Xử lý quyền Administrator & Phân quyền ACL tự động**:
+       - *Tháo cờ Read-Only*: Tự động gỡ thuộc tính chỉ đọc của file hosts trước khi ghi (`stat.S_IWRITE` và `SetFileAttributesW`).
+       - *Tự động cấp quyền vĩnh viễn (One-time ACL Grant)*: Khi có quyền Admin, tự động cấp quyền `Modify` cho nhóm `Users` (`icacls "%SystemRoot%\System32\drivers\etc\hosts" /grant "*S-1-5-32-545:(M)" /c`). Nhờ đó, tất cả các lần cập nhật chính sách sau (kể cả khi chạy quyền người dùng thông thường hoặc dọn dẹp khi dừng) đều có thể ghi trực tiếp tức thì mà không cần hỏi lại UAC.
+       - *Fallback Nâng quyền UAC qua PowerShell*: Nếu tiến trình đang chạy mà không có quyền ghi, `HostsBlocker` tự động xuất file tạm và gọi PowerShell chạy ngầm qua `Start-Process powershell -Verb RunAs -EncodedCommand` để ghi đè và cấu hình ACL, đảm bảo không bao giờ bị nghẽn chặn web.
+       - *Tự động kiểm tra quyền Admin khi khởi động Agent*: `run_agent.py` tích hợp `ensure_admin()` tự động nhắc nâng quyền qua UAC (có tùy chọn `--no-elevate` nếu muốn chạy hạn chế).
   2. **Lớp 2 - DNS Proxy chuẩn RFC 1035**: Viết lại hàm `build_blocked_response`:
      - Nếu truy vấn Type 1 (A) $\rightarrow$ Trả về IPv4 `0.0.0.0`.
      - Nếu truy vấn Type 28 (AAAA) $\rightarrow$ Trả về IPv6 `::`.
