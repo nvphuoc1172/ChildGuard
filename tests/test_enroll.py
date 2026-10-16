@@ -62,6 +62,12 @@ def test_access_token_ttl_shorter_than_refresh_token_ttl():
     assert access_exp < refresh_exp
 
 
+def test_token_ttls_are_ten_minutes_and_thirty_days():
+    now = datetime.utcnow()
+    assert security.access_token_expiry(now) - now == timedelta(minutes=10)
+    assert security.refresh_token_expiry(now) - now == timedelta(days=30)
+
+
 def test_enrollment_code_expiry_is_ten_minutes_from_now():
     now = datetime.utcnow()
     expiry = security.enrollment_code_expiry(now)
@@ -223,3 +229,48 @@ def test_enroll_same_code_twice_second_attempt_fails(client, db_session):
 
     assert first.status_code == 201
     assert second.status_code == 409
+
+
+def test_refresh_replaces_expired_access_token(client, db_session):
+    _seed_enrollment_code(db_session)
+    enrolled = client.post(
+        "/enroll", json={"code": "ABCD2345", "device_fingerprint": "f" * 64}
+    ).json()
+    token_row = db_session.query(models.Token).filter(
+        models.Token.device_id == enrolled["device_id"]
+    ).first()
+    token_row.access_expires_at = datetime.utcnow() - timedelta(seconds=1)
+    db_session.commit()
+
+    refreshed = client.post(
+        "/auth/refresh",
+        headers={"Authorization": f"Bearer {enrolled['refresh_token']}"},
+    )
+    assert refreshed.status_code == 200
+    assert refreshed.json()["access_token"] != enrolled["access_token"]
+
+    heartbeat = client.post(
+        "/heartbeat",
+        json={"policy_version": 1, "quota_used_seconds": 0, "queued_event_count": 0},
+        headers={"Authorization": f"Bearer {refreshed.json()['access_token']}"},
+    )
+    assert heartbeat.status_code == 200
+
+
+def test_refresh_rejects_expired_refresh_token(client, db_session):
+    _seed_enrollment_code(db_session)
+    enrolled = client.post(
+        "/enroll", json={"code": "ABCD2345", "device_fingerprint": "f" * 64}
+    ).json()
+    token_row = db_session.query(models.Token).filter(
+        models.Token.device_id == enrolled["device_id"]
+    ).first()
+    token_row.refresh_expires_at = datetime.utcnow() - timedelta(seconds=1)
+    db_session.commit()
+
+    response = client.post(
+        "/auth/refresh",
+        headers={"Authorization": f"Bearer {enrolled['refresh_token']}"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "refresh_token_expired"

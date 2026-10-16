@@ -80,7 +80,7 @@
           📋 Sao chép lệnh
         </button>
       </div>
-      <div id="enrollCommandText" style="background: #090d16; padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-family: monospace; color: #6ee7b7; word-break: break-all; font-size: 13px; user-select: all;">python agent/enroll.py --server SERVER_IP --port 8443 --ca-cert certs/ogk-ca.crt --code {{ latest_code.code }}</div>
+      <div id="enrollCommandText" style="background: #090d16; padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-family: monospace; color: #6ee7b7; word-break: break-all; font-size: 13px; user-select: all;">python agent/run_agent.py --ca-cert certs/ogk-ca.crt --pair</div>
       <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; font-size: 11px; color: var(--text-soft);">
         <p>*Thay thế <code>SERVER_IP</code> bằng địa chỉ Server của phụ huynh. (Thử nghiệm)</p>
         <p>*Nếu đang chạy kiểm thử cục bộ bằng HTTP cổng 8000: thêm <code>--http --port 8000</code> vào cuối lệnh.</p>
@@ -194,7 +194,7 @@
   function copyCommandHttp() {
     const activeCode = "{{ latest_code.code if latest_code else '' }}";
     if (!activeCode) return;
-    const cmd = "python agent/enroll.py --server 127.0.0.1 --port 8000 --http --code " + activeCode;
+    const cmd = "python agent/run_agent.py --server 127.0.0.1 --port 8000 --http --pair";
     if (navigator.clipboard) {
       navigator.clipboard.writeText(cmd).then(() => {
         showCopyFeedback("Đã sao chép lệnh HTTP dev vào clipboard!");
@@ -207,7 +207,7 @@
   }
 
   function copyCustomCommand(code) {
-    const cmd = "python agent/enroll.py --server 127.0.0.1 --port 8443 --ca-cert certs/ogk-ca.crt --code " + code;
+    const cmd = "python agent/run_agent.py --server 127.0.0.1 --port 8443 --ca-cert certs/ogk-ca.crt --pair";
     if (navigator.clipboard) {
       navigator.clipboard.writeText(cmd).then(() => {
         showCopyFeedback("Đã sao chép lệnh cho mã: " + code);

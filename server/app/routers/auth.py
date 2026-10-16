@@ -151,7 +151,7 @@ def login(
         parent_name=parent.full_name or "Phụ huynh",
     )
 
-@router.post("/auth/refresh")
+@router.post("/auth/refresh", response_model=schemas.DeviceTokenRefreshResponse)
 def refresh_device_token(request: Request, db: Session = Depends(get_db)):
     """Cấp lại access_token ngắn hạn cho Agent bằng refresh_token."""
     auth_header = request.headers.get("Authorization")
@@ -170,15 +170,26 @@ def refresh_device_token(request: Request, db: Session = Depends(get_db)):
     if not token_record:
         raise HTTPException(status_code=401, detail="invalid_or_revoked_refresh_token")
 
-    # Sinh access_token mới (TTL 15 phút)
-    new_access_token = security.create_device_access_token(token_record.device_id)
+    now = datetime.utcnow()
+    if token_record.refresh_expires_at <= now:
+        raise HTTPException(status_code=401, detail="refresh_token_expired")
+
+    device = db.get(models.Device, token_record.device_id)
+    if device is None or device.status != "active":
+        raise HTTPException(status_code=401, detail="device_inactive")
+
+    # Access token là token ngẫu nhiên tra cứu bằng hash, giống luồng enrollment.
+    new_access_token = security.generate_raw_token()
+    access_expires_at = security.access_token_expiry(now)
     token_record.access_token_hash = security.hash_token(new_access_token)
-    # Cập nhật thời gian hết hạn mới cho access_token trong database nếu bảng Token có trường expires_at
-    # token_record.access_expires_at = datetime.utcnow() + timedelta(minutes=15)
+    token_record.access_expires_at = access_expires_at
     
     db.commit()
 
-    return {"access_token": new_access_token, "token_type": "bearer"}
+    return schemas.DeviceTokenRefreshResponse(
+        access_token=new_access_token,
+        access_expires_at=access_expires_at.isoformat() + "Z",
+    )
 
 
 @router.post("/auth/logout")

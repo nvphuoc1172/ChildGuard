@@ -42,6 +42,22 @@ def enroll_device(payload: schemas.EnrollRequest, db: Session = Depends(get_db))
     if enrollment.expires_at < now:
         raise HTTPException(status_code=410, detail="code_expired")
 
+    # Một máy chỉ được gắn với một trẻ tại một thời điểm. Khi dùng mã mới trên
+    # cùng máy, thu hồi phiên cũ để không còn hai danh tính hoạt động song song.
+    previous_devices = (
+        db.query(models.Device)
+        .filter(
+            models.Device.fingerprint_hash == payload.device_fingerprint,
+            models.Device.status == "active",
+        )
+        .all()
+    )
+    for previous in previous_devices:
+        previous.status = "revoked"
+        db.query(models.Token).filter(models.Token.device_id == previous.id).update(
+            {models.Token.revoked: True}, synchronize_session=False
+        )
+
     # --- Tạo thiết bị mới ---
     device = models.Device(
         id=uuid.uuid4().hex,  # gán tường minh: không phụ thuộc thời điểm flush
@@ -82,12 +98,14 @@ def enroll_device(payload: schemas.EnrollRequest, db: Session = Depends(get_db))
     # --- Cấp cặp token ---
     raw_access = security.generate_raw_token()
     raw_refresh = security.generate_raw_token()
+    access_expires_at = security.access_token_expiry(now)
+    refresh_expires_at = security.refresh_token_expiry(now)
     token_row = models.Token(
         device_id=device.id,
         access_token_hash=security.hash_token(raw_access),
         refresh_token_hash=security.hash_token(raw_refresh),
-        access_expires_at=security.access_token_expiry(now),
-        refresh_expires_at=security.refresh_token_expiry(now),
+        access_expires_at=access_expires_at,
+        refresh_expires_at=refresh_expires_at,
         revoked=False,
     )
     db.add(token_row)
@@ -116,4 +134,6 @@ def enroll_device(payload: schemas.EnrollRequest, db: Session = Depends(get_db))
         access_token=raw_access,
         refresh_token=raw_refresh,
         policy_version=latest_policy.version,
+        access_expires_at=access_expires_at.isoformat() + "Z",
+        refresh_expires_at=refresh_expires_at.isoformat() + "Z",
     )

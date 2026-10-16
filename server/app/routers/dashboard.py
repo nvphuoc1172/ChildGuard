@@ -349,7 +349,13 @@ def dashboard_overview(
         if nc_obj and nc_obj.parent_id == parent.id:
             new_code_rem_sec = max(0, int((nc_obj.expires_at - now).total_seconds()))
 
-    devices = db.query(models.Device).order_by(models.Device.enrolled_at.desc()).all()
+    devices = (
+        db.query(models.Device)
+        .join(models.Child, models.Device.child_id == models.Child.id)
+        .filter(models.Child.parent_id == parent.id, models.Device.status == "active")
+        .order_by(models.Device.enrolled_at.desc())
+        .all()
+    )
     children_data = []
 
     for d in devices:
@@ -400,7 +406,8 @@ def dashboard_overview(
     # Yêu cầu đang chờ duyệt (Pending Requests)
     pending_reqs = (
         db.query(models.ChildRequest)
-        .filter(models.ChildRequest.status == "pending")
+        .join(models.Child, models.ChildRequest.child_id == models.Child.id)
+        .filter(models.ChildRequest.status == "pending", models.Child.parent_id == parent.id)
         .order_by(models.ChildRequest.created_at.desc())
         .all()
     )
@@ -424,6 +431,7 @@ def dashboard_overview(
 def create_enrollment_code_action(
     request: Request,
     child_name: str = Form(default="Minh An"),
+    child_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
     parent: models.Parent | None = Depends(get_optional_parent),
 ):
@@ -432,15 +440,32 @@ def create_enrollment_code_action(
         return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
 
     name_clean = child_name.strip() or "Bé yêu"
-    child = (
-        db.query(models.Child)
-        .filter(models.Child.parent_id == parent.id, models.Child.display_name == name_clean)
-        .first()
-    )
+    child = None
+    if child_id:
+        child = (
+            db.query(models.Child)
+            .filter(models.Child.id == child_id, models.Child.parent_id == parent.id)
+            .first()
+        )
+        if child is None:
+            raise HTTPException(status_code=404, detail="child_not_found")
+    else:
+        child = (
+            db.query(models.Child)
+            .filter(models.Child.parent_id == parent.id, models.Child.display_name == name_clean)
+            .first()
+        )
     if not child:
         child = models.Child(parent_id=parent.id, display_name=name_clean)
         db.add(child)
         db.flush()
+
+    # Mỗi trẻ chỉ giữ một mã chưa dùng còn hiệu lực.
+    db.query(models.EnrollmentCode).filter(
+        models.EnrollmentCode.child_id == child.id,
+        models.EnrollmentCode.used_at.is_(None),
+        models.EnrollmentCode.expires_at > datetime.utcnow(),
+    ).update({models.EnrollmentCode.expires_at: datetime.utcnow()}, synchronize_session=False)
 
     code = security.generate_enrollment_code()
     expires_at = security.enrollment_code_expiry()

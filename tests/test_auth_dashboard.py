@@ -350,6 +350,7 @@ def test_enroll_with_custom_child_name_and_command_display(client):
     assert "Bé Bắp" in view_resp.text
     assert code in view_resp.text
     assert "Sao chép lệnh" in view_resp.text
-    assert "python agent/enroll.py" in view_resp.text
+    assert "python agent/run_agent.py" in view_resp.text
+    assert "--pair" in view_resp.text
     assert "Tên của bé:" in view_resp.text
 

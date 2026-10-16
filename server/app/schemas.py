@@ -39,6 +39,14 @@ class EnrollResponse(BaseModel):
     access_token: str
     refresh_token: str
     policy_version: int
+    access_expires_at: str
+    refresh_expires_at: str
+
+
+class DeviceTokenRefreshResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    access_expires_at: str
 
 
 class ErrorResponse(BaseModel):
