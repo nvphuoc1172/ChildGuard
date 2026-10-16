@@ -272,3 +272,64 @@ def test_ipc_status_and_notifications_endpoints(temp_storage):
     assert enforcer.active_notification is not None
     assert len(enforcer.notification_history) == 1
     assert enforcer.notification_history[0]["milestone"] == 5
+
+
+def test_app_and_dns_blocked_notifications(temp_storage):
+    """Kiểm tra chức năng thông báo ra màn hình khi ứng dụng hoặc tên miền web bị chặn."""
+    notifications = []
+    enforcer = PolicyEnforcer(
+        storage=temp_storage,
+        notifier=lambda notif: notifications.append(notif),
+    )
+
+    # 1. Thông báo khi chặn ứng dụng
+    enforcer.notify_app_blocked("game.exe", reason="Ứng dụng nằm trong Blacklist")
+    assert len(notifications) == 1
+    assert notifications[-1]["level"] == "app_blocked"
+    assert "game.exe" in notifications[-1]["message"]
+    assert "Ứng dụng bị hạn chế" in notifications[-1]["title"]
+    assert enforcer.active_notification["level"] == "app_blocked"
+
+    # Rate limiting: Không spam thông báo cùng app trong 8s
+    enforcer.notify_app_blocked("game.exe")
+    assert len(notifications) == 1
+
+    # Khác app -> Phát thông báo mới
+    enforcer.notify_app_blocked("discord.exe")
+    assert len(notifications) == 2
+    assert "discord.exe" in notifications[-1]["message"]
+
+    # 2. Thông báo khi chặn DNS
+    enforcer.notify_dns_blocked("tiktok.com")
+    assert len(notifications) == 3
+    assert notifications[-1]["level"] == "dns_blocked"
+    assert "tiktok.com" in notifications[-1]["message"]
+    assert "Trang web bị hạn chế" in notifications[-1]["title"]
+
+    # Rate limiting: Không spam thông báo cùng domain trong 8s
+    enforcer.notify_dns_blocked("tiktok.com")
+    assert len(notifications) == 3
+
+    # Khác domain -> Phát thông báo mới
+    enforcer.notify_dns_blocked("facebook.com")
+    assert len(notifications) == 4
+    assert "facebook.com" in notifications[-1]["message"]
+
+
+def test_dns_proxy_triggers_enforcer_notification(temp_storage):
+    """Kiểm tra DNS Proxy chuyển tiếp thông báo chặn web sang Enforcer."""
+    from dns_proxy import DNSProxyServer
+
+    notifications = []
+    enforcer = PolicyEnforcer(
+        storage=temp_storage,
+        notifier=lambda notif: notifications.append(notif),
+    )
+    proxy = DNSProxyServer(temp_storage, enforcer=enforcer)
+    proxy._blacklist_cache = ["badgame.com"]
+
+    proxy.notify_dns_blocked("badgame.com")
+    assert len(notifications) == 1
+    assert notifications[0]["level"] == "dns_blocked"
+    assert "badgame.com" in notifications[0]["message"]
+

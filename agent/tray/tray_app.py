@@ -617,7 +617,15 @@ class TrayApp:
                 root = tk.Tk()
                 root.overrideredirect(True)
                 root.attributes("-topmost", True)
-                bg_color = "#b91c1c" if notif.get("level") == "grace_period" else ("#ea580c" if notif.get("level") == "urgent" else "#1e293b")
+                level = notif.get("level", "info")
+                if level in ("grace_period", "app_blocked", "dns_blocked"):
+                    bg_color = "#b91c1c"
+                elif level == "urgent":
+                    bg_color = "#ea580c"
+                elif level == "warning":
+                    bg_color = "#d97706"
+                else:
+                    bg_color = "#1e293b"
                 root.configure(bg=bg_color)
 
                 sw = root.winfo_screenwidth()
@@ -634,7 +642,8 @@ class TrayApp:
                 msg_lbl = tk.Label(frame, text=notif.get("message", ""), font=("Segoe UI", 10), fg="#f1f5f9", bg=bg_color, wraplength=380, justify="left")
                 msg_lbl.pack(anchor="w", pady=4)
 
-                btn_close = tk.Button(frame, text="Đã hiểu / Lưu bài", font=("Segoe UI", 9, "bold"), bg="#0f172a", fg="white", padx=10, pady=2, relief="flat", command=root.destroy)
+                btn_text = "Đã hiểu / Lưu bài" if level in ("grace_period", "urgent") else "Đã hiểu"
+                btn_close = tk.Button(frame, text=btn_text, font=("Segoe UI", 9, "bold"), bg="#0f172a", fg="white", padx=10, pady=2, relief="flat", command=root.destroy)
                 btn_close.pack(anchor="e")
 
                 root.after(10000, lambda: root.destroy() if root.winfo_exists() else None)

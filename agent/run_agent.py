@@ -112,6 +112,7 @@ def main():
     parser.add_argument("--http", action="store_true", help="HTTP chỉ dành cho môi trường dev")
     parser.add_argument("--dev-safe-lock", action="store_true", help="Chỉ gọi khóa Windows một lần cho mỗi đợt khóa khi test cùng máy")
     parser.add_argument("--pair", action="store_true", help="Nhập mã ghép đôi mới trước khi chạy Agent")
+    parser.add_argument("--no-tray", action="store_true", help="Không tự động khởi chạy Tray UI khay hệ thống")
     args = parser.parse_args()
 
     state_file = Path(args.state)
@@ -151,8 +152,8 @@ def main():
     enforcer_thread.start()
     print("[Agent] ✓ Policy Enforcer đã chạy (Quét App & Đếm thời gian sử dụng)")
 
-    # 3. Khởi tạo DNS Proxy Server
-    dns_proxy = DNSProxyServer(storage, port=args.dns_port)
+    # 3. Khởi tạo DNS Proxy Server (liên kết với enforcer để phát thông báo khi chặn web)
+    dns_proxy = DNSProxyServer(storage, port=args.dns_port, enforcer=enforcer)
     dns_thread = threading.Thread(target=dns_proxy.start, daemon=True)
     dns_thread.start()
 
@@ -168,6 +169,18 @@ def main():
     ipc_thread.start()
     print(f"[Agent] ✓ Local IPC Server đã mở tại 127.0.0.1:{args.ipc_port}")
 
+    # 6. Khởi chạy Tray UI song song trong cùng phiên Agent
+    tray_app = None
+    if not args.no_tray:
+        try:
+            from tray.tray_app import TrayApp
+            tray_app = TrayApp(ipc_url=f"http://127.0.0.1:{args.ipc_port}")
+            tray_thread = threading.Thread(target=tray_app.run, daemon=True)
+            tray_thread.start()
+            print("[Agent] ✓ Đã khởi chạy đồng thời Tray UI (Giao diện khay hệ thống)")
+        except Exception as e:
+            print(f"[Agent] Không thể khởi chạy Tray UI tự động: {e}")
+
     print()
     print("[Agent] Dịch vụ đang hoạt động bình thường. Nhấn Ctrl+C để dừng.")
     if args.dev_safe_lock:
@@ -176,6 +189,11 @@ def main():
 
     def shutdown(sig, frame):
         print("\n[Agent] Đang dừng an toàn các tiến trình...")
+        if tray_app:
+            try:
+                tray_app.stop()
+            except Exception:
+                pass
         enforcer.stop()
         dns_proxy.stop()
         sync_worker.stop()

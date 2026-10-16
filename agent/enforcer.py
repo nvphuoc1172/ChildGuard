@@ -328,7 +328,10 @@ def show_windows_popup(title: str, message: str, level: str = "warning"):
         print(f"[Windows Notification] 📢 [{title}] {message}")
         return
     try:
-        icon_flag = 0x00000030 if level in ("warning", "urgent", "grace_period") else 0x00000040
+        # 0x00000010 = MB_ICONERROR/STOP cho chặn app/web; 0x00000030 = MB_ICONWARNING
+        icon_flag = 0x00000010 if level in ("app_blocked", "dns_blocked") else (
+            0x00000030 if level in ("warning", "urgent", "grace_period") else 0x00000040
+        )
         flags = icon_flag | 0x00040000 | 0x00010000 | 0x00200000
         threading.Thread(
             target=lambda: ctypes.windll.user32.MessageBoxW(0, message, title, flags),
@@ -366,6 +369,10 @@ class PolicyEnforcer:
         self._subsecond_buffer = 0.0
         self._screen_time_buffer = 0
         self._last_lock_time = 0.0
+
+        # Bộ đệm thời gian thông báo chặn app & web để chống spam
+        self._last_app_block_notif: dict[str, float] = {}
+        self._last_dns_block_notif: dict[str, float] = {}
 
         # Trạng thái cảnh báo trước 10, 5, 1 phút và ân hạn 60 giây
         self._warned_milestones: set[int] = set()
@@ -426,6 +433,79 @@ class PolicyEnforcer:
                 print(f"[Enforcer] Lỗi trong notifier callback: {e}")
 
         return notif
+
+    def _emit_event_notification(
+        self,
+        title: str,
+        message: str,
+        level: str = "warning",
+        event_type: str = "",
+        subject: str = "",
+    ) -> dict:
+        """Tạo và phát thông báo sự kiện (chặn app / chặn web) ra ngoài Windows."""
+        notif = {
+            "id": f"notif_{int(time.time() * 1000)}_{event_type}",
+            "milestone": -1,
+            "remaining_seconds": self.effective_remaining_seconds,
+            "restriction_type": event_type,
+            "title": title,
+            "message": message,
+            "level": level,
+            "in_grace_period": self._in_grace_period,
+            "grace_seconds_left": self.grace_seconds_left,
+            "created_at": datetime.now().isoformat(),
+        }
+        self.active_notification = notif
+        self.notification_history.append(notif)
+        if len(self.notification_history) > 50:
+            self.notification_history = self.notification_history[-50:]
+
+        if self._notifier:
+            try:
+                self._notifier(notif)
+            except Exception as e:
+                print(f"[Enforcer] Lỗi trong notifier callback: {e}")
+
+        return notif
+
+    def notify_app_blocked(self, app_name: str, reason: str = ""):
+        """Phát thông báo ra ngoài màn hình Windows khi ứng dụng bị chặn."""
+        now = time.time()
+        last_time = self._last_app_block_notif.get(app_name, 0.0)
+        if now - last_time < 8.0:
+            return
+        self._last_app_block_notif[app_name] = now
+
+        msg = f"Ứng dụng '{app_name}' đã bị đóng vì nằm trong danh sách hạn chế theo quy định của cha mẹ."
+        if reason and "whitelist" in reason.lower():
+            msg = f"Ứng dụng '{app_name}' đã bị đóng vì không thuộc danh sách cho phép (Whitelist) của cha mẹ."
+        elif reason and "sha-256" in reason.lower():
+            msg = f"Ứng dụng '{app_name}' đã bị đóng vì nhận diện tệp thực thi bị cấm (khớp mã băm SHA-256)."
+
+        self._emit_event_notification(
+            title="🚫 ChildGuard — Ứng dụng bị hạn chế",
+            message=msg,
+            level="app_blocked",
+            event_type="app_blocked",
+            subject=app_name,
+        )
+
+    def notify_dns_blocked(self, domain: str):
+        """Phát thông báo ra ngoài màn hình Windows khi tên miền web bị chặn."""
+        now = time.time()
+        last_time = self._last_dns_block_notif.get(domain, 0.0)
+        if now - last_time < 8.0:
+            return
+        self._last_dns_block_notif[domain] = now
+
+        msg = f"Trang web '{domain}' đã bị chặn truy cập để bảo vệ an toàn cho em theo quy định của gia đình."
+        self._emit_event_notification(
+            title="🌐 ChildGuard — Trang web bị hạn chế",
+            message=msg,
+            level="dns_blocked",
+            event_type="web_blocked",
+            subject=domain,
+        )
 
     @staticmethod
     def is_workstation_locked() -> bool:
@@ -774,6 +854,8 @@ class PolicyEnforcer:
                         duration_sec=0,
                         policy_version=policy.get("version"),
                     )
+                    # Thông báo ra ngoài màn hình Windows cho bé
+                    self.notify_app_blocked(display_name, reason=reason)
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
 

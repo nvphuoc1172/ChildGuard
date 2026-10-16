@@ -327,14 +327,58 @@ def build_blocked_response(query_data: bytes, qname_end: int) -> bytes:
 
 
 class DNSProxyServer:
-    def __init__(self, storage: AgentStorage, host: str = "127.0.0.1", port: int = 53, upstream_dns: str = "8.8.8.8"):
+    def __init__(
+        self,
+        storage: AgentStorage,
+        host: str = "127.0.0.1",
+        port: int = 53,
+        upstream_dns: str = "8.8.8.8",
+        enforcer=None,
+        notifier=None,
+    ):
         self.storage = storage
         self.host = host
         self.port = port
         self.upstream_dns = upstream_dns
+        self.enforcer = enforcer
+        self.notifier = notifier
         self.running = False
         self.sock: socket.socket | None = None
         self._blacklist_cache: List[str] = []
+        self._last_dns_notif: dict[str, float] = {}
+
+    def notify_dns_blocked(self, domain: str):
+        """Phát thông báo ra ngoài màn hình Windows khi tên miền web bị chặn."""
+        if self.enforcer and hasattr(self.enforcer, "notify_dns_blocked"):
+            self.enforcer.notify_dns_blocked(domain)
+            return
+
+        now = time.time()
+        last_t = self._last_dns_notif.get(domain, 0.0)
+        if now - last_t < 8.0:
+            return
+        self._last_dns_notif[domain] = now
+
+        title = "🌐 ChildGuard — Trang web bị hạn chế"
+        msg = f"Trang web '{domain}' đã bị chặn truy cập để bảo vệ an toàn cho em theo quy định của gia đình."
+        notif = {
+            "title": title,
+            "message": msg,
+            "level": "dns_blocked",
+            "subject": domain,
+        }
+
+        if self.notifier:
+            try:
+                self.notifier(notif)
+            except Exception:
+                pass
+        else:
+            try:
+                from enforcer import show_windows_popup
+                show_windows_popup(title, msg, level="dns_blocked")
+            except Exception:
+                pass
 
     def sync_policy_rules(self, policy: dict | None = None):
         """Đồng bộ danh sách cấm tên miền từ Policy vào bộ nhớ và file Hosts."""
@@ -388,6 +432,8 @@ class DNSProxyServer:
                     duration_sec=0,
                     policy_version=policy.get("version"),
                 )
+                # Thông báo ra ngoài màn hình Windows cho bé
+                self.notify_dns_blocked(domain)
             else:
                 # Forward sang upstream DNS
                 up_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
