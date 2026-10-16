@@ -44,6 +44,21 @@ class IPCHandler(BaseHTTPRequestHandler):
             effective_rem_sec = getattr(self.enforcer, "effective_remaining_seconds", 0) if self.enforcer else 0
             effective_res_type = getattr(self.enforcer, "effective_restriction_type", "none") if self.enforcer else "none"
 
+            from datetime import datetime
+            cur_h = datetime.now().hour
+            morning_m = 0.0
+            afternoon_m = 0.0
+            evening_m = 0.0
+            if cur_h < 12:
+                morning_m = used_minutes
+            elif cur_h < 18:
+                morning_m = min(used_minutes, 60.0)
+                afternoon_m = round(max(0.0, used_minutes - morning_m), 1)
+            else:
+                morning_m = min(used_minutes, 60.0)
+                afternoon_m = min(round(max(0.0, used_minutes - morning_m), 1), 60.0)
+                evening_m = round(max(0.0, used_minutes - morning_m - afternoon_m), 1)
+
             status_data = {
                 "daily_quota": daily_quota,
                 "used_minutes": used_minutes,
@@ -59,6 +74,11 @@ class IPCHandler(BaseHTTPRequestHandler):
                 "effective_remaining_seconds": effective_rem_sec,
                 "effective_restriction_type": effective_res_type,
                 "policy": policy,
+                "time_blocks": {
+                    "morning_minutes": morning_m,
+                    "afternoon_minutes": afternoon_m,
+                    "evening_minutes": evening_m,
+                },
             }
 
             self.send_response(200)
