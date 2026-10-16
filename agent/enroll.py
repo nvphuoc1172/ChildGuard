@@ -138,6 +138,8 @@ def main() -> None:
             "access_token": result["access_token"],
             "refresh_token": result["refresh_token"],
             "policy_version": result["policy_version"],
+            "access_expires_at": result.get("access_expires_at"),
+            "refresh_expires_at": result.get("refresh_expires_at"),
             "server": args.server,
             "port": args.port,
             "use_http": args.http,

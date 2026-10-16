@@ -344,6 +344,7 @@ class PolicyEnforcer:
         storage: AgentStorage,
         known_system_hashes: dict[str, str] | None = None,
         lock_checker=None,
+        safe_lock_once: bool = False,
         idle_getter=None,
         notifier=None,
     ):
@@ -352,6 +353,7 @@ class PolicyEnforcer:
             known_system_hashes if known_system_hashes is not None else get_system_known_app_hashes()
         )
         self._lock_checker = lock_checker or self.is_workstation_locked
+        self.safe_lock_once = safe_lock_once
         self._idle_getter = idle_getter or get_idle_seconds
         self._notifier = notifier or self._default_notifier
         self.running = False
@@ -864,7 +866,7 @@ class PolicyEnforcer:
             else:
                 time_since_last_lock = now - self._last_lock_time
                 workstation_unlocked = not workstation_locked
-                if workstation_unlocked or time_since_last_lock >= 5.0:
+                if not self.safe_lock_once and (workstation_unlocked or time_since_last_lock >= 5.0):
                     needs_lock_action = True
 
             if needs_lock_action:

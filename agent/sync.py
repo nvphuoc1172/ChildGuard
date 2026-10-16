@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 import websockets
@@ -39,6 +40,11 @@ class SyncWorker:
         self.port = state_config.get("port", 8443)
         self.device_id = state_config["device_id"]
         self.access_token = state_config["access_token"]
+        self.refresh_token = state_config.get("refresh_token")
+        self.access_expires_at = state_config.get("access_expires_at")
+        self.state_path = Path(state_config.get("_state_path", Path(__file__).resolve().parent / "agent_state" / "device_token.json"))
+        self._token_lock = threading.RLock()
+        self._refresh_lock = threading.Lock()
         self.ca_cert_path = ca_cert_path
         self.use_http = state_config.get("use_http", False)
         self.running = False
@@ -50,24 +56,24 @@ class SyncWorker:
             return ssl.create_default_context(cafile=self.ca_cert_path)
         return ssl._create_unverified_context()
 
-    def _http_request(self, path: str, method: str = "GET", body: dict | None = None) -> dict:
+    def _http_request(self, path: str, method: str = "GET", body: dict | None = None, is_retry: bool = False) -> dict:
         scheme = "http" if self.use_http else "https"
         url = f"{scheme}://{self.server}:{self.port}{path}"
         data_bytes = json.dumps(body).encode("utf-8") if body is not None else None
-        headers = {"Authorization": f"Bearer {self.access_token}"}
+        with self._token_lock:
+            access_token = self.access_token
+        headers = {"Authorization": f"Bearer {access_token}"}
         if data_bytes is not None:
             headers["Content-Type"] = "application/json"
 
         ctx = self._get_ssl_context()
         req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
-        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
-            return json.loads(resp.read().decode("utf-8"))
         try:
             with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             # Nếu gặp HTTP 401/403 và chưa retry, tự động Refresh Token và thử lại 1 lần duy nhất
-            if e.code in (401, 403):
+            if e.code in (401, 403) and not is_retry:
                 if self._refresh_access_token():
                     return self._http_request(path, method, body, is_retry=True)
                 print(f"[Sync] CẢNH BÁO: Token bị từ chối (HTTP {e.code}). Có thể Server đã bị reset dữ liệu.")
@@ -143,14 +149,17 @@ class SyncWorker:
 
     def _refresh_access_token(self) -> bool:
         """Đọc refresh_token từ cấu hình, gọi API để lấy access_token mới và ghi đè file."""
+        with self._refresh_lock:
+            return self._refresh_access_token_locked()
+
+    def _refresh_access_token_locked(self) -> bool:
+        """Phần thực thi được serialize để heartbeat và WebSocket không refresh đè nhau."""
         print("[Sync] ⚠️ Access Token hết hạn, đang tự động làm mới (Refresh Token)...")
-        config_path = Path(__file__).resolve().parent / "agent_state" / "device_token.json"
-        
         try:
-            if not config_path.exists():
+            if not self.state_path.exists():
                 return False
-                
-            with open(config_path, "r", encoding="utf-8") as f:
+
+            with self._token_lock, open(self.state_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
             
             refresh_token = config.get("refresh_token")
@@ -158,7 +167,8 @@ class SyncWorker:
                 print("[Sync] Lỗi: Không tìm thấy refresh_token trong cấu hình.")
                 return False
 
-            url = f"https://{self.server}:{self.port}/auth/refresh"
+            scheme = "http" if self.use_http else "https"
+            url = f"{scheme}://{self.server}:{self.port}/auth/refresh"
             headers = {
                 "Authorization": f"Bearer {refresh_token}",
                 "Content-Type": "application/json"
@@ -171,12 +181,15 @@ class SyncWorker:
                 new_access = res_data.get("access_token")
                 
                 if new_access:
-                    self.access_token = new_access
-                    config["access_token"] = new_access
-                    
-                    # Cập nhật mã mới xuống file ổ cứng
-                    with open(config_path, "w", encoding="utf-8") as fw:
-                        json.dump(config, fw, indent=2)
+                    with self._token_lock:
+                        self.access_token = new_access
+                        self.access_expires_at = res_data.get("access_expires_at")
+                        config["access_token"] = new_access
+                        config["access_expires_at"] = self.access_expires_at
+                        # Ghi atomically để mất điện không làm hỏng file token.
+                        tmp_path = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
+                        tmp_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+                        tmp_path.replace(self.state_path)
                         
                     print("[Sync] ✓ Đã làm mới Access Token thành công. Khôi phục kết nối.")
                     return True
@@ -184,15 +197,28 @@ class SyncWorker:
             print(f"[Sync] ❌ Cấp lại token thất bại: {e}")
             
         return False
+
+    def _access_token_needs_refresh(self, margin_seconds: int = 120) -> bool:
+        if not self.access_expires_at:
+            return True
+        try:
+            expiry = datetime.fromisoformat(self.access_expires_at.rstrip("Z")).replace(tzinfo=timezone.utc)
+            return (expiry - datetime.now(timezone.utc)).total_seconds() <= margin_seconds
+        except (TypeError, ValueError):
+            return True
     
     async def _websocket_loop(self):
         """Vòng lặp WebSocket thời gian thực (<5s latency)."""
         ws_scheme = "ws" if self.use_http else "wss"
-        ws_url = f"{ws_scheme}://{self.server}:{self.port}/ws/{self.device_id}?token={self.access_token}"
         ssl_ctx = self._get_ssl_context()
 
         while self.running:
             try:
+                if self._access_token_needs_refresh():
+                    self._refresh_access_token()
+                with self._token_lock:
+                    ws_token = self.access_token
+                ws_url = f"{ws_scheme}://{self.server}:{self.port}/ws/{self.device_id}?token={ws_token}"
                 print(f"[Sync WS] Đang kết nối kênh lệnh khẩn WebSocket tới {self.server}:{self.port}...")
                 async with websockets.connect(ws_url, ssl=ssl_ctx, ping_interval=20, ping_timeout=10) as ws:
                     print("[Sync WS] ✓ Kết nối WebSocket thành công. Sẵn sàng nhận lệnh khẩn cấp!")
@@ -215,6 +241,7 @@ class SyncWorker:
                             print(f"[Sync WS] Lỗi xử lý message: {e}")
             except Exception as e:
                 print(f"[Sync WS] Mất kết nối WebSocket ({e}). Thử lại sau 5s...")
+                self._refresh_access_token()
                 await asyncio.sleep(5)
 
     def _run_ws_thread(self):
@@ -222,6 +249,8 @@ class SyncWorker:
 
     def run_heartbeat_loop(self, interval: int = 30):
         self.running = True
+        # Làm mới ngay khi Windows vừa khởi động lại; refresh token tồn tại 30 ngày.
+        self._refresh_access_token()
         # Luôn đồng bộ chính sách mới nhất ngay khi Agent khởi chạy
         try:
             self.fetch_and_apply_policy()

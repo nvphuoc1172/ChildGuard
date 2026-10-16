@@ -26,6 +26,7 @@ from enforcer import PolicyEnforcer
 from ipc import IPCServer
 from storage import AgentStorage
 from sync import SyncWorker
+from enroll import call_enroll, compute_fingerprint, save_state
 
 
 def is_admin() -> bool:
@@ -76,6 +77,29 @@ def load_agent_state(state_path: Path) -> dict:
     return json.loads(state_path.read_text(encoding="utf-8"))
 
 
+def enroll_from_console(state_path: Path, server: str, port: int, ca_cert: str, use_http: bool) -> dict:
+    """Ghép đôi ngay trong cửa sổ Agent và thay thế an toàn phiên cũ."""
+    print("\n[Agent] Nhập mã 8 ký tự được tạo trên Dashboard.")
+    code = input("Mã ghép đôi: ").strip().upper()
+    if len(code) != 8:
+        raise ValueError("Mã ghép đôi phải có đúng 8 ký tự.")
+    result = call_enroll(server, port, ca_cert, code, compute_fingerprint(), use_http=use_http)
+    state = {
+        "device_id": result["device_id"],
+        "access_token": result["access_token"],
+        "refresh_token": result["refresh_token"],
+        "access_expires_at": result.get("access_expires_at"),
+        "refresh_expires_at": result.get("refresh_expires_at"),
+        "policy_version": result["policy_version"],
+        "server": server,
+        "port": port,
+        "use_http": use_http,
+    }
+    save_state(state_path, state)
+    print("[Agent] ✓ Ghép đôi thành công. Agent sẽ khởi động với phiên mới.")
+    return state
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", default="agent_state/device_token.json", help="Đường dẫn file token ghép đôi")
@@ -83,6 +107,11 @@ def main():
     parser.add_argument("--dns-port", type=int, default=53, help="Cổng DNS Proxy (mặc định: 53)")
     parser.add_argument("--ipc-port", type=int, default=48123, help="Cổng IPC Server (mặc định: 48123)")
     parser.add_argument("--no-elevate", action="store_true", help="Không tự động yêu cầu quyền Administrator qua UAC")
+    parser.add_argument("--server", default="127.0.0.1", help="Server dùng ở lần ghép đôi đầu tiên")
+    parser.add_argument("--port", type=int, default=8443)
+    parser.add_argument("--http", action="store_true", help="HTTP chỉ dành cho môi trường dev")
+    parser.add_argument("--dev-safe-lock", action="store_true", help="Chỉ gọi khóa Windows một lần cho mỗi đợt khóa khi test cùng máy")
+    parser.add_argument("--pair", action="store_true", help="Nhập mã ghép đôi mới trước khi chạy Agent")
     args = parser.parse_args()
 
     state_file = Path(args.state)
@@ -96,7 +125,19 @@ def main():
     ensure_admin(allow_elevate=not args.no_elevate)
     HostsBlocker.setup_permissions()
 
-    config = load_agent_state(state_file)
+    if state_file.exists():
+        if args.pair:
+            old = load_agent_state(state_file)
+            config = enroll_from_console(
+                state_file, old.get("server", args.server), old.get("port", args.port),
+                ca_cert_path, old.get("use_http", args.http),
+            )
+        else:
+            config = load_agent_state(state_file)
+    else:
+        print("[Agent] Chưa ghép đôi. Có thể nhập mã ngay tại đây, không cần chạy enroll.py.")
+        config = enroll_from_console(state_file, args.server, args.port, ca_cert_path, args.http)
+    config["_state_path"] = str(state_file.resolve())
     print(f"[Agent] Thiết bị ID: {config['device_id']}")
     print(f"[Agent] Máy chủ điều phối: {config['server']}:{config.get('port', 8443)}")
 
@@ -105,7 +146,7 @@ def main():
     print("[Agent] ✓ Đã khởi tạo kho lưu trữ cục bộ SQLite (agent_state/agent.db)")
 
     # 2. Khởi tạo Policy Enforcer
-    enforcer = PolicyEnforcer(storage)
+    enforcer = PolicyEnforcer(storage, safe_lock_once=args.dev_safe_lock)
     enforcer_thread = threading.Thread(target=enforcer.run_loop, daemon=True)
     enforcer_thread.start()
     print("[Agent] ✓ Policy Enforcer đã chạy (Quét App & Đếm thời gian sử dụng)")
@@ -129,6 +170,8 @@ def main():
 
     print()
     print("[Agent] Dịch vụ đang hoạt động bình thường. Nhấn Ctrl+C để dừng.")
+    if args.dev_safe_lock:
+        print("[Agent] ⚠ DEV SAFE LOCK: mỗi đợt chính sách chỉ gọi khóa Windows một lần.")
     print("=" * 60)
 
     def shutdown(sig, frame):

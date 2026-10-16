@@ -37,7 +37,7 @@ pip install -r requirements.txt
 2. Sao chép tệp chứng chỉ `ogk-ca.crt` từ server vào thư mục `agent/certs/ogk-ca.crt`.
 3. Chạy lệnh ghép đôi trên máy Windows:
    ```powershell
-   python enroll.py --server <IP_MÁY_CHỦ> --port 8443 --ca-cert certs\ogk-ca.crt
+   python run_agent.py --server <IP_MÁY_CHỦ> --port 8443 --ca-cert certs\ogk-ca.crt
    ```
    *Nhập mã ghép đôi 8 ký tự khi được yêu cầu.*
    Thông tin xác thực sẽ được lưu an toàn tại `agent_state/device_token.json`.
