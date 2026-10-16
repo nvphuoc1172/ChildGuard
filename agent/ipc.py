@@ -35,11 +35,19 @@ class IPCHandler(BaseHTTPRequestHandler):
             used_minutes = round(used_seconds / 60, 1)
             remaining_minutes = max(0, round(daily_quota - used_minutes, 1))
 
+            is_idle = getattr(self.enforcer, "is_idle", False) if self.enforcer else False
+            idle_seconds = getattr(self.enforcer, "current_idle_seconds", 0.0) if self.enforcer else 0.0
+            workstation_locked = getattr(self.enforcer, "is_locked_screen", False) if self.enforcer else False
+
             status_data = {
                 "daily_quota": daily_quota,
                 "used_minutes": used_minutes,
+                "used_seconds": used_seconds,
                 "remaining_minutes": remaining_minutes,
                 "is_locked": self.storage.get_lock_status(),
+                "is_idle": is_idle,
+                "idle_seconds": round(idle_seconds, 1),
+                "workstation_locked": workstation_locked,
                 "policy": policy,
             }
 

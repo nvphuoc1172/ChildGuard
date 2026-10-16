@@ -70,6 +70,8 @@ def heartbeat(
         policy_version=latest_version,
         policy_changed=policy_changed,
         pending_commands=out_commands,
+        server_time=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        server_timestamp=now.timestamp(),
     )
 
 

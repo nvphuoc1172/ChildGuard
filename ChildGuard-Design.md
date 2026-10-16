@@ -544,6 +544,44 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
 
 ---
 
+#### 10.2.7. Đếm Thời gian Sử dụng Thực & Đồng bộ Thời gian UTC Client-Server (Sai số ≤ ±30s/giờ, Chống trễ GMT, Phát hiện Không thao tác > 5 phút)
+- **Hướng phát triển & Mục tiêu**:
+  - Đếm thời gian sử dụng màn hình thực tế (Screen-time Counter):
+    - Không tính thời gian khi máy tính đang ở màn hình khóa (Lock Screen).
+    - Không tính thời gian khi người dùng không có thao tác bàn phím/chuột quá 5 phút (Idle timeout $\ge$ 300 giây).
+    - Tự động tiếp tục đếm giờ ngay khi người dùng thao tác trở lại.
+  - Đảm bảo độ chính xác cao: Sai số tích lũy $\le \pm 30$ giây trên mỗi giờ so với đồng hồ bấm tay chuẩn.
+  - Đồng bộ thời gian Client-Server thống nhất theo chuẩn UTC, khắc phục dứt điểm lỗi timer client không chạy và lỗi trễ múi giờ GMT do dùng RTC cục bộ.
+- **Các lỗi đã gặp & Nguyên nhân gốc rễ**:
+  1. **Timer bên Client bị kẹt / không chạy**:
+     - *Nhận diện nhầm màn hình khóa*: Hàm `is_workstation_locked()` cũ chỉ gọi `OpenInputDesktop(0, False, 0x0100)`. Khi Agent chạy trong môi trường Service hoặc phiên người dùng không có quyền trực tiếp, hàm trả về 0 (`NULL`). Code cũ coi 0 là màn hình khóa `is_workstation_locked = True`, làm ngưng hoàn toàn việc cộng thời gian sử dụng.
+     - *Khóa giả do lệch múi giờ Lịch biểu*: Hàm `check_schedule()` cũ lấy giờ RTC địa phương (`datetime.now()`) nhưng so sánh với ma trận hoặc mốc ngày UTC, dẫn tới ban ngày bị nhận diện nhầm thành ban đêm (ngoài khung giờ cho phép), liên tục rơi vào nhánh `should_lock = True` khiến timer bị đóng băng.
+  2. **Lỗi trễ GMT (lệch 7 tiếng)**:
+     - Client dùng ngày theo RTC cục bộ (`date.today().isoformat()`), trong khi Server dùng ngày theo UTC (`datetime.utcnow().date()`). Sự chênh lệch 7 tiếng (GMT+7) khiến các sự kiện sử dụng máy vào buổi sáng bị server lọc bỏ do có timestamp thuộc ngày hôm trước, đồng thời việc reset hạn mức ngày không đồng bộ giữa 2 bên.
+  3. **Sai số đếm giờ lớn (> 90 giây/giờ)**:
+     - Đoạn code cũ sử dụng phép ép kiểu số nguyên `int(now - last_tick)` với chu kỳ 2s. Mỗi chu kỳ làm mất $0.05 - 0.10$ giây phần dư số thực. Sau 1800 chu kỳ (1 giờ), sai số tích lũy lên tới $90 - 180$ giây, vi phạm nghiêm trọng hạn mức $\le \pm 30$s.
+- **Giải pháp kỹ thuật chi tiết đã triển khai**:
+  1. **Triệt tiêu sai số làm tròn bằng Monotonic Clock & Subsecond Buffer**:
+     - Sử dụng `time.monotonic()` thay cho `time.time()` để không bị ảnh hưởng bởi NTP step adjustments hay việc thay đổi đồng hồ hệ thống.
+     - Sử dụng bộ đệm số thực `_subsecond_buffer += elapsed_float`. Ở mỗi tick, chỉ lấy phần nguyên giây `whole_sec = int(_subsecond_buffer)` để ghi vào cơ sở dữ liệu và giữ lại phần dư số thực ($0 \le r < 1.0$ giây) cho chu kỳ tiếp theo:
+       $$\text{whole\_sec} = \lfloor \text{\_subsecond\_buffer} \rfloor, \quad \text{\_subsecond\_buffer} \leftarrow \text{\_subsecond\_buffer} - \text{whole\_sec}$$
+     - Nhờ đó, sai số tích lũy so với đồng hồ bấm tay sau 1 giờ hoạt động luôn được giới hạn nghiêm ngặt trong phạm vi $< 1.0$ giây ($\ll 30$ giây).
+  2. **Cơ chế phát hiện không thao tác quá 5 phút (Idle Detection)**:
+     - Tích hợp Win32 API `GetLastInputInfo` và `GetTickCount` qua `ctypes.Structure LASTINPUTINFO`.
+     - Tính toán số giây người dùng không tương tác:
+       $$\text{idle\_seconds} = \frac{(\text{GetTickCount}() - \text{lii.dwTime}) \ \& \ \text{0xFFFFFFFF}}{1000.0}$$
+     - Khi $\text{idle\_seconds} \ge 300.0$ giây (5 phút), hệ thống đặt cờ `is_idle = True` và tạm dừng cộng thời gian sử dụng. Khi trẻ gõ phím hoặc di chuột ($\text{idle\_seconds} < 300.0$), cờ tự động xóa và bộ đếm tiếp tục tính giờ bình thường.
+     - Cập nhật Tray UI và Cửa sổ minh bạch: hiển thị nhãn `💤 Tạm dừng (>5p không thao tác)` để trẻ và phụ huynh nắm rõ.
+  3. **Khắc phục nhận diện màn hình khóa (Workstation Lock Fallback)**:
+     - Bổ sung cơ chế fallback kiểm tra cửa sổ foreground: `hwnd = ctypes.windll.user32.GetForegroundWindow()`. Nếu `hwnd != 0`, máy tính đang có cửa sổ tương tác người dùng $\rightarrow$ khẳng định màn hình không khóa.
+  4. **Đồng bộ thời gian UTC Client-Server & Chống tua ngược RTC**:
+     - Endpoint `/heartbeat` và kênh WebSocket `/ws/{device_id}` của Server gửi kèm `server_time` (chuỗi UTC ISO-8601) và `server_timestamp` (float epoch UTC).
+     - Module `AgentStorage` neo giữ mốc thời gian máy chủ vào đồng hồ đơn điệu:
+       $$\text{current\_server\_utc\_ts} = \text{\_synced\_server\_ts} + (\text{time.monotonic}() - \text{\_sync\_mono})$$
+     - Mọi phép tính mốc thời gian, tạo event `created_at`, kiểm tra ngày chuyển giao (`get_current_utc_date_str()`) đều dựa trên mốc neo này $\rightarrow$ triệt tiêu hoàn toàn lỗi trễ GMT và chống gian lận khi trẻ tua ngược đồng hồ RTC trên Windows.
+
+---
+
 
 
 ## 11. Giả định đã chọn (nêu rõ để bạn duyệt trước khi code)

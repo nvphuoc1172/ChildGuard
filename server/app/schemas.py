@@ -17,6 +17,8 @@ class HeartbeatResponse(BaseModel):
     policy_version: int
     policy_changed: bool
     pending_commands: list[PendingCommandOut]
+    server_time: str | None = None
+    server_timestamp: float | None = None
 
 
 class PolicyOut(BaseModel):

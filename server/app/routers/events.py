@@ -3,7 +3,7 @@
 Đồng bộ sự kiện hàng loạt từ Agent lên Server khi có mạng lại.
 Có xử lý Idempotency Key chống đếm trùng thời gian sử dụng và log chặn.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
@@ -43,7 +43,8 @@ def batch_events(
         created_dt = now
         if ev.created_at:
             try:
-                created_dt = datetime.fromisoformat(ev.created_at.replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(ev.created_at.replace("Z", "+00:00"))
+                created_dt = dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
             except Exception:
                 created_dt = now
 

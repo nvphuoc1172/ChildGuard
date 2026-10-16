@@ -11,12 +11,13 @@ import json
 import sqlite3
 import time
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
 class AgentStorage:
     def __init__(self, db_path: Path | str | None = None):
+        self._time_offset = 0.0
         if db_path is None:
             base_dir = Path(__file__).resolve().parent / "agent_state"
             base_dir.mkdir(parents=True, exist_ok=True)
@@ -26,6 +27,37 @@ class AgentStorage:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._init_db()
+
+    def sync_server_time(self, server_timestamp: float):
+        """Đồng bộ thời gian máy chủ: tính độ lệch giữa Server UTC và đồng hồ Client (chống tua RTC)."""
+        local_ts = time.time()
+        self._time_offset = float(server_timestamp) - local_ts
+        self._sync_mono = time.monotonic()
+        self._synced_server_ts = float(server_timestamp)
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE agent_state SET last_server_contact_ts = ?, in_degraded_mode = 0 WHERE id = 1",
+                (local_ts,),
+            )
+            conn.commit()
+
+    def get_server_utc_timestamp(self) -> float:
+        """Trả về timestamp UTC đã đồng bộ với máy chủ (dùng monotonic nếu đã sync để chống tua ngược RTC)."""
+        if hasattr(self, "_synced_server_ts") and hasattr(self, "_sync_mono"):
+            return self._synced_server_ts + (time.monotonic() - self._sync_mono)
+        return time.time() + getattr(self, "_time_offset", 0.0)
+
+    def get_server_utc_datetime(self) -> datetime:
+        """Trả về datetime UTC đã đồng bộ với máy chủ (naive UTC)."""
+        return datetime.fromtimestamp(self.get_server_utc_timestamp(), tz=timezone.utc).replace(tzinfo=None)
+
+    def get_synced_local_datetime(self) -> datetime:
+        """Trả về datetime theo múi giờ địa phương tương ứng với server timestamp đồng bộ (chống tua ngược RTC)."""
+        return datetime.fromtimestamp(self.get_server_utc_timestamp())
+
+    def get_current_utc_date_str(self) -> str:
+        """Lấy ngày hiện tại (YYYY-MM-DD) theo chuẩn UTC đã đồng bộ (tránh lỗi trễ GMT khi dùng RTC)."""
+        return self.get_server_utc_datetime().strftime("%Y-%m-%d")
 
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=15.0)
@@ -73,7 +105,7 @@ class AgentStorage:
                 """
             )
             # Khởi tạo bản ghi mặc định cho agent_state nếu chưa có
-            today_str = date.today().isoformat()
+            today_str = self.get_current_utc_date_str()
             conn.execute(
                 """
                 INSERT OR IGNORE INTO agent_state (id, current_date, quota_used_seconds, is_locked, last_server_contact_ts)
@@ -140,7 +172,7 @@ class AgentStorage:
     def add_event(self, event_type: str, subject: str | None = None, duration_sec: int = 0, policy_version: int | None = None) -> str:
         """Thêm sự kiện vào hàng đợi offline với idempotency_key duy nhất."""
         idempotency_key = f"ev_{uuid.uuid4().hex}"
-        now_str = datetime.utcnow().isoformat()
+        now_str = self.get_server_utc_datetime().strftime("%Y-%m-%dT%H:%M:%SZ")
         with self._get_connection() as conn:
             conn.execute(
                 """
@@ -183,8 +215,8 @@ class AgentStorage:
             conn.commit()
 
     def get_screen_time_today(self) -> int:
-        """Lấy số giây đã sử dụng hôm nay (tự reset nếu sang ngày mới)."""
-        today_str = date.today().isoformat()
+        """Lấy số giây đã sử dụng hôm nay (tự reset nếu sang ngày mới theo chuẩn UTC đồng bộ)."""
+        today_str = self.get_current_utc_date_str()
         with self._get_connection() as conn:
             row = conn.execute("SELECT current_date, quota_used_seconds FROM agent_state WHERE id = 1").fetchone()
             if row and row["current_date"] != today_str:
@@ -198,8 +230,8 @@ class AgentStorage:
             return row["quota_used_seconds"] if row else 0
 
     def add_screen_time(self, seconds: int) -> int:
-        """Cộng dồn thời gian dùng máy trong ngày."""
-        today_str = date.today().isoformat()
+        """Cộng dồn thời gian dùng máy trong ngày (theo ngày UTC đồng bộ)."""
+        today_str = self.get_current_utc_date_str()
         with self._get_connection() as conn:
             row = conn.execute("SELECT current_date, quota_used_seconds FROM agent_state WHERE id = 1").fetchone()
             if row and row["current_date"] != today_str:

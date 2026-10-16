@@ -87,6 +87,8 @@ class SyncWorker:
         }
         res = self._http_request("/heartbeat", method="POST", body=body)
         self.storage.update_server_contact()
+        if res.get("server_timestamp") is not None:
+            self.storage.sync_server_time(res["server_timestamp"])
         return res
 
     def fetch_and_apply_policy(self):
@@ -200,7 +202,12 @@ class SyncWorker:
                         msg_text = await ws.recv()
                         try:
                             msg = json.loads(msg_text)
-                            if "command_id" in msg and "type" in msg:
+                            if msg.get("type") == "time_sync":
+                                server_ts = msg.get("server_timestamp")
+                                if server_ts is not None:
+                                    self.storage.sync_server_time(server_ts)
+                                    print(f"[Sync WS] ⏱️ Đồng bộ thời gian UTC máy chủ thành công: {msg.get('server_time')}")
+                            elif "command_id" in msg and "type" in msg:
                                 self.execute_command(msg["command_id"], msg["type"], msg.get("payload", {}))
                                 # Phản hồi ACK ngay qua WebSocket
                                 await ws.send(json.dumps({"type": "ack", "command_id": msg["command_id"]}))

@@ -114,7 +114,13 @@ class TrayApp:
                 u_min = st.get("used_minutes", 0)
                 r_min = st.get("remaining_minutes", 0)
                 is_locked = st.get("is_locked", False)
-                lock_tag = " (🔒 Đang khóa)" if is_locked else " (🟢 Đang dùng)"
+                is_idle = st.get("is_idle", False)
+                if is_locked:
+                    lock_tag = " (🔒 Đang khóa)"
+                elif is_idle:
+                    lock_tag = " (💤 Tạm dừng - Không thao tác >5p)"
+                else:
+                    lock_tag = " (🟢 Đang dùng)"
 
                 matrix = sch.get("matrix")
                 if matrix and isinstance(matrix, list) and len(matrix) == 7:
@@ -299,8 +305,11 @@ class TrayApp:
             quota = st.get("daily_quota", 0)
             used = st.get("used_minutes", 0)
             is_locked = st.get("is_locked", False)
+            is_idle = st.get("is_idle", False)
             if is_locked or rem <= 0:
                 return f"🔒 Đã khóa (Còn lại: 0/{quota} phút)"
+            if is_idle:
+                return f"💤 Tạm dừng (>5p không thao tác) - Còn lại: {rem}/{quota}p"
             return f"⏳ Còn lại: {rem} / {quota} phút (Đã dùng: {used}p)"
 
         def _build_menu():
@@ -325,7 +334,13 @@ class TrayApp:
                         rem = st.get("remaining_minutes", 0)
                         quota = st.get("daily_quota", 0)
                         is_locked = st.get("is_locked", False)
-                        status_str = "Đã khóa" if (is_locked or rem <= 0) else f"Còn {rem}p"
+                        is_idle = st.get("is_idle", False)
+                        if is_locked or rem <= 0:
+                            status_str = "Đã khóa"
+                        elif is_idle:
+                            status_str = "Tạm dừng"
+                        else:
+                            status_str = f"Còn {rem}p"
                         self.icon.title = f"ChildGuard — {status_str} ({rem}/{quota} phút)"
                         self.icon.menu = _build_menu()
                         self.icon.update_menu()

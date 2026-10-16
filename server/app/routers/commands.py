@@ -179,6 +179,14 @@ async def websocket_device_endpoint(
 
     await manager.connect(device_id, websocket)
 
+    # Gửi thông điệp time_sync để Agent đồng bộ thời gian chuẩn UTC với Server
+    now_ws = datetime.utcnow()
+    await websocket.send_json({
+        "type": "time_sync",
+        "server_time": now_ws.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "server_timestamp": now_ws.timestamp(),
+    })
+
     try:
         # Kiểm tra xem có lệnh pending nào chưa giao không -> giao ngay
         db = SessionLocal()

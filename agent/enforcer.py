@@ -300,16 +300,50 @@ def check_process_rule(
         return False, "Ứng dụng hợp lệ", identified_app
 
 
+class LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_uint),
+        ("dwTime", ctypes.c_uint),
+    ]
+
+
+def get_idle_seconds() -> float:
+    """Trả về số giây kể từ lần tương tác bàn phím/chuột cuối cùng (Win32 API)."""
+    if sys.platform != "win32":
+        return 0.0
+    try:
+        lii = LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            millis = (ctypes.windll.kernel32.GetTickCount() - lii.dwTime) & 0xFFFFFFFF
+            return max(0.0, millis / 1000.0)
+    except Exception:
+        pass
+    return 0.0
+
+
 class PolicyEnforcer:
-    def __init__(self, storage: AgentStorage, known_system_hashes: dict[str, str] | None = None):
+    def __init__(
+        self,
+        storage: AgentStorage,
+        known_system_hashes: dict[str, str] | None = None,
+        lock_checker=None,
+        idle_getter=None,
+    ):
         self.storage = storage
         self.known_system_hashes = (
             known_system_hashes if known_system_hashes is not None else get_system_known_app_hashes()
         )
+        self._lock_checker = lock_checker or self.is_workstation_locked
+        self._idle_getter = idle_getter or get_idle_seconds
         self.running = False
         self.manual_locked = False
+        self.is_idle = False
+        self.current_idle_seconds = 0.0
+        self.is_locked_screen = False
         self._lock = threading.Lock()
-        self._last_tick_time = time.time()
+        self._last_tick_mono = time.monotonic()
+        self._subsecond_buffer = 0.0
         self._screen_time_buffer = 0
         self._last_lock_time = 0.0
 
@@ -319,10 +353,18 @@ class PolicyEnforcer:
         if sys.platform != "win32":
             return False
         try:
+            # 1. Thử OpenInputDesktop: nếu mở được và hợp lệ -> màn hình đang mở (Desktop bình thường)
             desk = ctypes.windll.user32.OpenInputDesktop(0, False, 0x0100)  # DESKTOP_SWITCHDESKTOP
             if desk:
                 ctypes.windll.user32.CloseDesktop(desk)
-                return False  # Màn hình đang mở, người dùng đang ở Desktop
+                return False
+
+            # 2. Nếu OpenInputDesktop trả về 0 (xảy ra khi chạy trong Service hoặc phiên không có quyền trực tiếp),
+            # kiểm tra GetForegroundWindow: nếu có handle cửa sổ foreground đang hiển thị -> người dùng đang tương tác
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if hwnd != 0:
+                return False
+
             return True  # Màn hình đang ở chế độ Lock Screen / Winlogon
         except Exception:
             return False
@@ -360,6 +402,26 @@ class PolicyEnforcer:
             conn.execute("UPDATE agent_state SET quota_used_seconds = ?, is_locked = 0 WHERE id = 1", (reduced_used,))
             conn.commit()
 
+    def _get_effective_local_datetime(self) -> datetime:
+        """Lấy datetime giờ địa phương thực tế (ưu tiên timestamp đồng bộ máy chủ, an toàn với mock/fallback)."""
+        try:
+            if hasattr(self.storage, "get_synced_local_datetime"):
+                dt = self.storage.get_synced_local_datetime()
+                if isinstance(dt, datetime):
+                    return dt
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self.storage, "get_server_utc_timestamp"):
+                ts = self.storage.get_server_utc_timestamp()
+                if isinstance(ts, (int, float)):
+                    return datetime.fromtimestamp(ts)
+        except Exception:
+            pass
+
+        return datetime.now()
+
     def check_schedule(self, schedule: dict, now_dt: datetime | None = None) -> bool:
         """Kiểm tra thời gian hiện tại có nằm trong khung giờ cho phép hay không.
 
@@ -370,8 +432,8 @@ class PolicyEnforcer:
         if not schedule:
             return True
 
-        if now_dt is None:
-            now_dt = datetime.now()
+        if now_dt is None or not isinstance(now_dt, datetime):
+            now_dt = self._get_effective_local_datetime()
 
         # 1. Kiểm tra ma trận lịch tuần 7x48 (độ phân giải 30 phút)
         matrix = schedule.get("matrix")
@@ -440,98 +502,124 @@ class PolicyEnforcer:
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
 
+    def tick(self, elapsed_float: float):
+        """Thực thi một chu kỳ kiểm tra chính sách và đếm thời gian sử dụng thực."""
+        now = time.time()
+        policy = self.storage.get_policy()
+        quota = policy.get("quota", {})
+        daily_limit_sec = int(quota.get("daily_minutes", 120)) * 60
+        schedule = policy.get("schedule", {})
+
+        # Chế độ degraded safe-mode khi mất mạng dài ngày
+        mode = self.storage.check_connection_grace_period()
+        if mode == "degraded":
+            ar = policy.setdefault("app_rules", {})
+            if isinstance(ar, dict):
+                ar.setdefault("blacklist", []).extend(["game.exe", "discord.exe", "roblox.exe"])
+            elif isinstance(ar, list):
+                ar.extend(["game.exe", "discord.exe", "roblox.exe"])
+
+        # 1. Quét và chặn ứng dụng
+        self.scan_and_enforce_processes(policy)
+
+        # 2. Kiểm tra trạng thái máy: Khóa màn hình & Không hoạt động (Idle > 5 phút)
+        workstation_locked = bool(self._lock_checker())
+        self.is_locked_screen = workstation_locked
+
+        idle_sec = float(self._idle_getter())
+        self.current_idle_seconds = idle_sec
+        self.is_idle = (idle_sec >= 300.0)
+
+        # 3. Kiểm tra điều kiện khóa máy
+        used_seconds = self.storage.get_screen_time_today()
+        in_schedule = self.check_schedule(schedule)
+        quota_exceeded = used_seconds >= daily_limit_sec
+
+        should_lock = self.manual_locked or quota_exceeded or (not in_schedule)
+
+        if should_lock:
+            is_already_locked = self.storage.get_lock_status()
+            if self.manual_locked:
+                lock_reason = "Khóa theo lệnh phụ huynh"
+            elif quota_exceeded:
+                lock_reason = f"Đã hết hạn mức ngày ({used_seconds}/{daily_limit_sec}s)"
+            else:
+                day_names = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
+                now_dt = self._get_effective_local_datetime()
+                lock_reason = f"Ngoài khung giờ cho phép ({day_names[now_dt.weekday()]} lúc {now_dt.strftime('%H:%M')} - Lịch tuần 7x48) -> Khóa máy trong 5s"
+
+            # Kiểm tra hành động khóa:
+            # - Nếu chưa ở trạng thái khóa: khóa ngay lập tức!
+            # - Nếu đã từng khóa nhưng màn hình đang mở (trẻ đăng nhập lại),
+            #   hoặc đã quá 5 giây kể từ lần khóa trước: khóa lại ngay (đảm bảo trong 5s)!
+            needs_lock_action = False
+            if not is_already_locked:
+                needs_lock_action = True
+            else:
+                time_since_last_lock = now - self._last_lock_time
+                workstation_unlocked = not workstation_locked
+                if workstation_unlocked or time_since_last_lock >= 5.0:
+                    needs_lock_action = True
+
+            if needs_lock_action:
+                self.lock_workstation(reason=lock_reason)
+        else:
+            # Đang trong hạn mức và trong khung giờ hợp lệ -> Nếu trước đó từng bị khóa thì mở lại
+            if self.storage.get_lock_status():
+                print("[Enforcer] 🔓 Đủ điều kiện sử dụng máy -> Giải phóng trạng thái khóa.")
+                self.storage.set_lock_status(False)
+
+            # 4. Đếm thời gian sử dụng thực (Screen-time Counter):
+            # - Không tính khi máy khóa (workstation_locked == True)
+            # - Không tính khi không có thao tác quá 5 phút (self.is_idle == True)
+            # - Sử dụng bộ tích lũy sub-second float để triệt tiêu sai số làm tròn (sai số <= +-1s/giờ << +-30s)
+            if not workstation_locked and not self.is_idle and elapsed_float > 0:
+                self._subsecond_buffer += elapsed_float
+                whole_sec = int(self._subsecond_buffer)
+                if whole_sec > 0:
+                    self._subsecond_buffer -= whole_sec
+                    used_seconds = self.storage.add_screen_time(whole_sec)
+                    self._screen_time_buffer += whole_sec
+
+                    # Mỗi 60 giây tích lũy tạo 1 event screen_time vào hàng đợi
+                    if self._screen_time_buffer >= 60:
+                        self.storage.add_event(
+                            event_type="screen_time",
+                            duration_sec=self._screen_time_buffer,
+                            policy_version=policy.get("version"),
+                        )
+                        self._screen_time_buffer = 0
+
+                    # Kiểm tra lại ngay sau khi cộng: nếu vừa chạm mốc hạn mức thì khóa ngay
+                    if used_seconds >= daily_limit_sec:
+                        print(f"[Enforcer] 🔒 VỪA HẾT HẠN MỨC NGÀY ({used_seconds}/{daily_limit_sec}s) -> KHÓA MÁY!")
+                        self.lock_workstation(reason="Hết hạn mức ngày")
+
     def run_loop(self, poll_interval: float = 2.0):
         """Vòng lặp chính của Enforcer."""
         self.running = True
-        self._last_tick_time = time.time()
-        last_event_flush_time = time.time()
+        self._last_tick_mono = time.monotonic()
+        last_flush_mono = time.monotonic()
 
         print("[Enforcer] Bắt đầu Policy Enforcer & Screen-time Counter...")
 
         while self.running:
             try:
-                now = time.time()
-                elapsed = int(now - self._last_tick_time)
-                self._last_tick_time = now
+                now_mono = time.monotonic()
+                elapsed_float = max(0.0, now_mono - self._last_tick_mono)
+                self._last_tick_mono = now_mono
 
-                policy = self.storage.get_policy()
-                quota = policy.get("quota", {})
-                daily_limit_sec = int(quota.get("daily_minutes", 120)) * 60
-                schedule = policy.get("schedule", {})
+                self.tick(elapsed_float)
 
-                # Chế độ degraded safe-mode khi mất mạng dài ngày
-                mode = self.storage.check_connection_grace_period()
-                if mode == "degraded":
-                    ar = policy.setdefault("app_rules", {})
-                    if isinstance(ar, dict):
-                        ar.setdefault("blacklist", []).extend(["game.exe", "discord.exe", "roblox.exe"])
-                    elif isinstance(ar, list):
-                        ar.extend(["game.exe", "discord.exe", "roblox.exe"])
-
-                # 1. Quét và chặn ứng dụng
-                self.scan_and_enforce_processes(policy)
-
-                # 2. Kiểm tra điều kiện khóa máy
-                used_seconds = self.storage.get_screen_time_today()
-                in_schedule = self.check_schedule(schedule)
-                quota_exceeded = used_seconds >= daily_limit_sec
-
-                should_lock = self.manual_locked or quota_exceeded or (not in_schedule)
-
-                if should_lock:
-                    is_already_locked = self.storage.get_lock_status()
-                    if self.manual_locked:
-                        lock_reason = "Khóa theo lệnh phụ huynh"
-                    elif quota_exceeded:
-                        lock_reason = f"Đã hết hạn mức ngày ({used_seconds}/{daily_limit_sec}s)"
-                    else:
-                        day_names = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
-                        now_dt = datetime.now()
-                        lock_reason = f"Ngoài khung giờ cho phép ({day_names[now_dt.weekday()]} lúc {now_dt.strftime('%H:%M')} - Lịch tuần 7x48) -> Khóa máy trong 5s"
-
-                    # Kiểm tra hành động khóa:
-                    # - Nếu chưa ở trạng thái khóa: khóa ngay lập tức!
-                    # - Nếu đã từng khóa nhưng màn hình đang mở (trẻ đăng nhập lại),
-                    #   hoặc đã quá 5 giây kể từ lần khóa trước: khóa lại ngay (đảm bảo trong 5s)!
-                    needs_lock_action = False
-                    if not is_already_locked:
-                        needs_lock_action = True
-                    else:
-                        time_since_last_lock = now - self._last_lock_time
-                        workstation_unlocked = not self.is_workstation_locked()
-                        if workstation_unlocked or time_since_last_lock >= 5.0:
-                            needs_lock_action = True
-
-                    if needs_lock_action:
-                        self.lock_workstation(reason=lock_reason)
-                else:
-                    # Đang trong hạn mức và trong khung giờ hợp lệ -> Nếu trước đó từng bị khóa thì mở lại
-                    if self.storage.get_lock_status():
-                        print("[Enforcer] 🔓 Đủ điều kiện sử dụng máy -> Giải phóng trạng thái khóa.")
-                        self.storage.set_lock_status(False)
-
-                    # 3. Đếm thời gian sử dụng màn hình (khi máy không bị khóa)
-                    # Nếu màn hình đang khóa (Lock Screen), không đếm thời gian
-                    workstation_locked = self.is_workstation_locked()
-                    if not workstation_locked and elapsed > 0:
-                        used_seconds = self.storage.add_screen_time(elapsed)
-                        self._screen_time_buffer += elapsed
-
-                        # Mỗi 60 giây tích lũy tạo 1 event screen_time vào hàng đợi
-                        if self._screen_time_buffer >= 60 or (now - last_event_flush_time) >= 60:
-                            if self._screen_time_buffer > 0:
-                                self.storage.add_event(
-                                    event_type="screen_time",
-                                    duration_sec=self._screen_time_buffer,
-                                    policy_version=policy.get("version"),
-                                )
-                                self._screen_time_buffer = 0
-                                last_event_flush_time = now
-
-                        # Kiểm tra lại ngay sau khi cộng: nếu vừa chạm mốc hạn mức thì khóa ngay
-                        if used_seconds >= daily_limit_sec:
-                            print(f"[Enforcer] 🔒 VỪA HẾT HẠN MỨC NGÀY ({used_seconds}/{daily_limit_sec}s) -> KHÓA MÁY!")
-                            self.lock_workstation(reason="Hết hạn mức ngày")
+                if self._screen_time_buffer > 0 and (now_mono - last_flush_mono) >= 60.0:
+                    policy = self.storage.get_policy()
+                    self.storage.add_event(
+                        event_type="screen_time",
+                        duration_sec=self._screen_time_buffer,
+                        policy_version=policy.get("version"),
+                    )
+                    self._screen_time_buffer = 0
+                    last_flush_mono = now_mono
 
             except Exception as e:
                 print(f"[Enforcer] Lỗi trong vòng lặp enforcer: {e}")
@@ -540,3 +628,4 @@ class PolicyEnforcer:
 
     def stop(self):
         self.running = False
+
