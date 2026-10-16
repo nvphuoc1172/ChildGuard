@@ -490,8 +490,14 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
   - **Đếm giờ sai khi màn hình đang khóa**: Bộ đếm vẫn trừ giờ khi máy tính đang ở màn hình khóa Lock Screen.
 - **Cách sửa**:
   1. **Tự động đánh giá và giải phóng trạng thái khóa**: Mỗi chu kỳ 2 giây, Enforcer tính toán lại điều kiện: nếu chưa vượt hạn mức ngày, đang trong khung giờ cho phép và không bị phụ huynh phát lệnh khóa tay $\rightarrow$ Enforcer tự động xóa cờ khóa `self.storage.set_lock_status(False)` để thời gian tiếp tục được đếm dồn.
-  2. **Tích hợp Windows API kiểm tra phiên người dùng**: Bổ sung hàm `is_windows_locked()` sử dụng API `user32.OpenInputDesktop(0, False, 0x0100)`. Khi máy tính ở màn hình khóa, bộ đếm tạm dừng để không trừ giờ oan của trẻ; khi trẻ đăng nhập vào Desktop, bộ đếm hoạt động trở lại bình thường.
+  2. **Tích hợp Windows API kiểm tra phiên người dùng**: Bổ sung hàm `is_workstation_locked()` sử dụng API `user32.OpenInputDesktop(0, False, 0x0100)`. Khi máy tính ở màn hình khóa, bộ đếm tạm dừng để không trừ giờ oan của trẻ; khi trẻ đăng nhập vào Desktop, bộ đếm hoạt động trở lại bình thường.
   3. **Tự động mở khóa khi lưu Policy mới**: Trong `storage.py`, khi hàm `save_policy` nhận hạn mức mới lớn hơn thời gian đã sử dụng, hệ thống tự động cập nhật `is_locked = 0`.
+  4. **Lịch tuần Cho phép / Khóa với độ phân giải 30 phút (Ma trận $7 \times 48$) & Thực thi khóa trong 5 giây**:
+     - Cấu trúc ma trận: 7 ngày (Thứ Hai = 0 .. Chủ Nhật = 6) $\times$ 48 ô thời gian (mỗi ô tương ứng chính xác 30 phút: `00:00-00:30`, `00:30-01:00`, ..., `23:30-24:00`). Giá trị `1` là cho phép, `0` là khóa.
+     - Enforcer tính toán ô thời gian hiện tại theo công thức: `day = now.weekday()`, `slot = now.hour * 2 + (now.minute // 30)`.
+     - *Khóa trong vòng 5 giây*: Vòng lặp Enforcer chạy chu kỳ 2s $\rightarrow$ khi bước vào khung giờ cấm, lệnh `LockWorkStation()` được thực thi ngay trong vòng 2 giây ($< 5$ giây).
+     - *Chống mở khóa ngoài giờ*: Nếu trẻ biết mật khẩu tài khoản và cố tình đăng nhập lại khi ngoài khung giờ, Enforcer kiểm tra trạng thái màn hình (`not is_workstation_locked()`) và tự động khóa lại máy tính ngay lập tức trong tối đa 5 giây.
+     - *Giao diện Dashboard*: Cung cấp bảng điều khiển ma trận trực quan cho phép phụ huynh nhấp/kéo chuột, bật tắt nhanh theo ngày/giờ và chọn các mẫu có sẵn (24/7, Khóa tất cả, Giờ học chuẩn, Học tập & Cuối tuần).
 
 ---
 

@@ -169,7 +169,7 @@ def test_save_policy_with_matrix_via_dashboard(client, db_session):
             "blocked_apps": "badgame.exe",
             "blocked_domains": "badweb.com",
         },
-        cookies={"parent_session": session_cookie},
+        cookies={"ogk_session": session_cookie},
     )
     assert res.status_code == 200
 
