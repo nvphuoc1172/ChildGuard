@@ -442,3 +442,247 @@ body {
     padding: 16px;
   }
 }
+
+/* Alerts */
+.alert {
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  margin-bottom: 20px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.alert-success {
+  background-color: var(--success-bg);
+  border: 1px solid var(--success);
+  color: #34d399;
+}
+.alert-danger {
+  background-color: var(--danger-bg);
+  border: 1px solid var(--danger);
+  color: #f87171;
+}
+.alert-info {
+  background-color: rgba(59, 130, 246, 0.15);
+  border: 1px solid var(--primary);
+  color: #60a5fa;
+}
+
+/* Charts */
+.chart-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  margin-top: 16px;
+}
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.chart-bars-wrap {
+  display: flex;
+  align-items: flex-end;
+  height: 190px;
+  gap: 6px;
+  padding-top: 24px;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+}
+.chart-col {
+  flex: 1;
+  min-width: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  position: relative;
+}
+.chart-track {
+  width: 100%;
+  max-width: 32px;
+  flex: 1;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 4px 4px 0 0;
+  display: flex;
+  align-items: flex-end;
+  position: relative;
+}
+.chart-val-bar {
+  width: 100%;
+  background: linear-gradient(180deg, var(--primary), #1d4ed8);
+  border-radius: 4px 4px 0 0;
+  transition: height 0.4s ease;
+  min-height: 2px;
+}
+.chart-val-bar.highlight {
+  background: linear-gradient(180deg, #10b981, #047857);
+}
+.chart-tooltip {
+  position: absolute;
+  top: -24px;
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.chart-axis-label {
+  font-size: 11px;
+  color: var(--text-soft);
+  margin-top: 8px;
+  text-align: center;
+}
+
+/* Top 10 Ranking Lists */
+.rank-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.rank-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-surface-elevated);
+  border-radius: var(--radius-sm);
+  gap: 12px;
+}
+.rank-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+}
+.rank-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.rank-1 { background: #f59e0b; color: #000; }
+.rank-2 { background: #94a3b8; color: #000; }
+.rank-3 { background: #d97706; color: #fff; }
+.rank-other { background: rgba(255, 255, 255, 0.1); color: var(--text-muted); }
+
+/* Modal Confirmation */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay.active {
+  display: flex;
+}
+.modal-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  width: 90%;
+  max-width: 500px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+/* Kid Today Screen */
+.kid-container {
+  max-width: 900px;
+  margin: 0 auto;
+}
+.kid-hero {
+  background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+  border-radius: var(--radius-lg);
+  padding: 32px 24px;
+  color: #ffffff;
+  box-shadow: 0 10px 25px -5px rgba(168, 85, 247, 0.4);
+  margin-bottom: 24px;
+}
+.kid-hero-title {
+  font-size: 26px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+.kid-hero-sub {
+  font-size: 15px;
+  opacity: 0.95;
+}
+.kid-badge-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.22);
+  padding: 8px 16px;
+  border-radius: 9999px;
+  font-weight: 700;
+  font-size: 14px;
+  margin-top: 14px;
+}
+.kid-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.kid-stat-card {
+  background: var(--bg-surface);
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  text-align: center;
+  transition: transform 0.2s ease;
+}
+.kid-stat-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--primary);
+}
+.kid-stat-icon {
+  font-size: 38px;
+  margin-bottom: 8px;
+}
+.kid-stat-num {
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--primary);
+}
+.kid-stat-label {
+  font-size: 14px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.kid-time-blocks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.kid-block-card {
+  background: var(--bg-surface-elevated);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  text-align: center;
+}
+.kid-block-title {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.kid-block-val {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+

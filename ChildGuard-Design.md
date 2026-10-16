@@ -217,9 +217,11 @@ http://<SERVER_IP>:8443/dashboard
 | `POST /heartbeat`            | Access token (agent)                                  | Vòng lặp 60s: gửi trạng thái, nhận version + lệnh chờ     |
 | `WS /ws/{device_id}`         | Access token (agent, qua query/header lúc handshake) | Kênh lệnh khẩn thời gian thực                                |
 | `POST /events/batch`         | Access token (agent)                                  | Gửi lô sự kiện đã đệm, kèm`idempotency_key` mỗi event |
-| `POST /commands`             | Session (parent)                                      | Phụ huynh phát lệnh khẩn (lock/unlock/grant_minutes)          |
-| `POST /commands/{id}/ack`    | Access token (agent)                                  | Agent xác nhận đã thực thi lệnh                             |
-| `GET /reports/{child_id}`    | Session (parent)                                      | Báo cáo tổng hợp thời gian sử dụng, app, domain đã chặn |
+| `GET /reports/{child_id}`    | Session (parent)                                      | Báo cáo tổng hợp thời gian sử dụng (ngày/tuần), top 10 app & domain bị chặn |
+| `POST /reports/cleanup`      | Token/Session                                         | Tác vụ dọn dẹp tự động log, sự kiện, kiểm toán quá 90 ngày |
+| `POST /reports/{child_id}/purge` | Session (parent)                                  | Xóa toàn bộ dữ liệu của con (Server + phát lệnh clear_data xuống Agent) |
+| `GET /dashboard/today`       | Công khai / Session                                   | Màn hình "Hôm nay em đã dùng gì" cho trẻ với hình ảnh trực quan |
+| `POST /today/request-time`   | Công khai / Form                                      | Trẻ gửi yêu cầu xin thêm giờ từ màn hình của bé |
 | `GET /audit`                 | Session (parent, chỉ xem của con mình)             | Xem nhật ký kiểm toán liên quan                              |
 
 Tất cả endpoint có rate-limit theo `device_id` hoặc `parent_id` (vd `slowapi` middleware) để chống lạm dụng heartbeat/spam.
@@ -293,7 +295,10 @@ ChildGuard/
 │   │   │                              cấp (Khóa ngay, Mở khóa, +15p, +30p), duyệt yêu cầu nhanh.
 │   │   ├── policy.html            ✅ Quản lý chính sách: Quota ngày, Lịch tuần, App blacklist, Web blacklist.
 │   │   ├── requests.html          ✅ Danh sách yêu cầu xin thêm giờ của trẻ + nút Duyệt/Từ chối.
-│   │   ├── reports.html           ✅ Báo cáo thống kê trực quan screen time, top app/web bị chặn.
+│   │   ├── reports.html           ✅ Báo cáo thống kê trực quan screen time (ngày 24h & tuần 7d),
+│   │   │                              Top 10 app/domain bị chặn kèm số lần, nút Xóa toàn bộ dữ liệu của con tôi.
+│   │   ├── child_today.html       ✅ Màn hình 'Hôm nay em đã dùng gì' cho trẻ: ngôn ngữ đơn giản,
+│   │   │                              hình ảnh minh họa ấm áp, phân bổ thời gian và nút xin thêm giờ.
 │   │   ├── audit.html             ✅ Nhật ký kiểm toán minh bạch theo Nghị định 13/2023.
 │   │   └── device_status.html     ✅ Trang dev xem danh sách thiết bị.
 │   └── static/css/
@@ -306,8 +311,15 @@ ChildGuard/
 │   ├── test_commands.py          ✅ 5 test tạo lệnh, WebSocket/delivery, ack command.
 │   ├── test_events_batch.py      ✅ 2 test batch upload và idempotency key deduplication.
 │   ├── test_policy.py            ✅ 2 test cập nhật policy tăng version và lấy policy.
-│   └── test_requests.py          ✅ 2 test tạo và phê duyệt/từ chối yêu cầu của trẻ.
-│                                  -> TỔNG CỘNG: 42 TESTS PASS 100%.
+│   ├── test_requests.py          ✅ 2 test tạo và phê duyệt/từ chối yêu cầu của trẻ.
+│   ├── test_app_enforcer.py      ✅ 8 test kiểm soát ứng dụng blacklist/whitelist & SHA-256.
+│   ├── test_hosts_blocker.py     ✅ 6 test DNS proxy & Windows hosts blocker.
+│   ├── test_weekly_schedule.py   ✅ 2 test ma trận lịch tuần 7x48.
+│   ├── test_screen_time_sync.py  ✅ 5 test đếm thời gian thực & đồng bộ UTC chống tua RTC.
+│   ├── test_warnings_and_grace_period.py ✅ 24 test cảnh báo trước 10, 5, 1 phút & ân hạn 60s.
+│   └── test_reports_and_retention.py ✅ 5 test báo cáo ngày/tuần, Top 10 kèm số lần,
+│                                      retention 90 ngày tự động và xóa dữ liệu 2 chiều.
+│                                  -> TỔNG CỘNG: 91 TESTS PASS 100%.
 
 │
 ├── demo/

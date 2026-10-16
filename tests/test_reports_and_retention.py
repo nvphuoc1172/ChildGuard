@@ -1,0 +1,421 @@
+"""Unit test cho Báo cáo & Thống kê, Màn hình trẻ em, Retention 90 ngày và Xóa dữ liệu hai chiều.
+
+Kiểm tra:
+1. Báo cáo & Thống kê:
+   - Biểu đồ thời lượng bé sử dụng máy theo ngày (24 giờ) và theo tuần (7 ngày).
+   - Top 10 ứng dụng đã bị chặn kèm số lần chính xác.
+   - Top 10 tên miền đã bị chặn kèm số lần chính xác.
+2. Màn hình 'Hôm nay em đã dùng gì' cho trẻ:
+   - Trả về giao diện thân thiện với hình ảnh và ngôn ngữ ấm áp.
+   - Cho phép trẻ gửi yêu cầu xin thêm giờ từ màn hình.
+3. Vòng đời dữ liệu & Retention 90 ngày:
+   - Tự động dọn dẹp các bản ghi EventLog, AuditLog, Command, ChildRequest cũ quá 90 ngày.
+   - Giữ nguyên các bản ghi trong vòng 90 ngày.
+4. Nút 'Xóa toàn bộ dữ liệu của con tôi':
+   - Xóa sạch dữ liệu sự kiện của con trên Server.
+   - Phát lệnh khẩn cấp clear_data tới thiết bị của trẻ.
+   - Agent nhận lệnh và xóa sạch hàng đợi sự kiện event_queue, reset screen-time về 0.
+"""
+from datetime import datetime, timedelta
+import json
+import uuid
+
+import pytest
+
+import sys
+from pathlib import Path
+
+agent_dir = Path(__file__).resolve().parent.parent / "agent"
+if str(agent_dir) not in sys.path:
+    sys.path.insert(0, str(agent_dir))
+
+from app import models
+from app.routers.reports import cleanup_old_logs, get_child_stats_summary
+from storage import AgentStorage
+from enforcer import PolicyEnforcer
+from sync import SyncWorker
+
+
+def _setup_child_and_device(db_session):
+    parent = models.Parent(
+        email=f"parent_{uuid.uuid4().hex[:8]}@ogk.local",
+        password_hash="dummy",
+        full_name="Nguyễn Văn Ba",
+    )
+    db_session.add(parent)
+    db_session.flush()
+
+    child = models.Child(parent_id=parent.id, display_name="Bé Minh An")
+    db_session.add(child)
+    db_session.flush()
+
+    device = models.Device(
+        child_id=child.id,
+        device_name="Laptop Bé An",
+        fingerprint_hash="fp_test_123456",
+        status="active",
+    )
+    db_session.add(device)
+    db_session.flush()
+
+    policy = models.Policy(
+        child_id=child.id,
+        version=1,
+        quota_json=json.dumps({"daily_minutes": 120}),
+        schedule_json=json.dumps({"start_time": "07:00", "end_time": "21:30"}),
+        app_rules_json=json.dumps({"mode": "blacklist", "blacklist": []}),
+        domain_rules_json=json.dumps({"mode": "blacklist", "blacklist": []}),
+        created_at=datetime.utcnow(),
+    )
+    db_session.add(policy)
+    db_session.commit()
+    return parent, child, device
+
+
+def test_reports_hourly_and_weekly_breakdown(client, db_session):
+    """Kiểm tra biểu đồ thời lượng theo ngày (24 giờ) và theo tuần (7 ngày)."""
+    parent, child, device = _setup_child_and_device(db_session)
+
+    now = datetime.utcnow()
+    today_start = datetime(now.year, now.month, now.day)
+
+    # Tạo 3 sự kiện screen_time hôm nay ở các khung giờ khác nhau: 08:00, 14:00, 20:00
+    ev1 = models.EventLog(
+        idempotency_key=f"ev_{uuid.uuid4().hex}",
+        device_id=device.id,
+        child_id=child.id,
+        event_type="screen_time",
+        duration_sec=1800,  # 30 phút
+        created_at=today_start + timedelta(hours=8, minutes=15),
+    )
+    ev2 = models.EventLog(
+        idempotency_key=f"ev_{uuid.uuid4().hex}",
+        device_id=device.id,
+        child_id=child.id,
+        event_type="screen_time",
+        duration_sec=2700,  # 45 phút
+        created_at=today_start + timedelta(hours=14, minutes=30),
+    )
+    ev3 = models.EventLog(
+        idempotency_key=f"ev_{uuid.uuid4().hex}",
+        device_id=device.id,
+        child_id=child.id,
+        event_type="screen_time",
+        duration_sec=900,   # 15 phút
+        created_at=today_start + timedelta(hours=20, minutes=0),
+    )
+    # Tạo sự kiện 2 ngày trước trong tuần
+    ev_past = models.EventLog(
+        idempotency_key=f"ev_{uuid.uuid4().hex}",
+        device_id=device.id,
+        child_id=child.id,
+        event_type="screen_time",
+        duration_sec=3600,  # 60 phút
+        created_at=(today_start - timedelta(days=2)) + timedelta(hours=10),
+    )
+    db_session.add_all([ev1, ev2, ev3, ev_past])
+    db_session.commit()
+
+    resp = client.get(f"/reports/{child.id}")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # Tổng thời gian hôm nay: 30 + 45 + 15 = 90 phút
+    assert data["today_screen_time_minutes"] == 90.0
+    assert data["remaining_minutes"] == 30.0  # 120 - 90 = 30 phút
+
+    # Biểu đồ theo ngày (24 giờ): các khung giờ 08:00, 14:00, 20:00 có số phút chính xác
+    hourly = data["hourly_minutes"]
+    assert hourly["08:00"] == 30.0
+    assert hourly["14:00"] == 45.0
+    assert hourly["20:00"] == 15.0
+    assert hourly["00:00"] == 0.0
+
+    # Biểu đồ theo tuần: ngày 2 ngày trước có 60 phút, ngày hôm nay có 90 phút
+    daily = data["daily_minutes"]
+    today_key = today_start.strftime("%d/%m")
+    past_key = (today_start - timedelta(days=2)).strftime("%d/%m")
+    assert daily[today_key] == 90.0
+    assert daily[past_key] == 60.0
+
+
+def test_reports_top_10_blocked_apps_and_webs_with_counts(client, db_session):
+    """Kiểm tra Top 10 ứng dụng và Top 10 tên miền bị chặn kèm số lần vi phạm chính xác."""
+    parent, child, device = _setup_child_and_device(db_session)
+    now = datetime.utcnow()
+
+    # Tạo 12 ứng dụng bị chặn với số lần từ 12 xuống 1
+    for i in range(1, 13):
+        app_name = f"game_{i}.exe"
+        count = i * 2
+        for _ in range(count):
+            ev = models.EventLog(
+                idempotency_key=f"ev_app_{uuid.uuid4().hex}",
+                device_id=device.id,
+                child_id=child.id,
+                event_type="app_blocked",
+                subject=app_name,
+                duration_sec=0,
+                created_at=now - timedelta(hours=1),
+            )
+            db_session.add(ev)
+
+    # Tạo 12 tên miền bị chặn với số lần khác nhau
+    for i in range(1, 13):
+        domain = f"badsite-{i}.com"
+        count = i * 3
+        for _ in range(count):
+            ev = models.EventLog(
+                idempotency_key=f"ev_web_{uuid.uuid4().hex}",
+                device_id=device.id,
+                child_id=child.id,
+                event_type="web_blocked",
+                subject=domain,
+                duration_sec=0,
+                created_at=now - timedelta(hours=2),
+            )
+            db_session.add(ev)
+
+    db_session.commit()
+
+    resp = client.get(f"/reports/{child.id}")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # Kiểm tra top_blocked_apps: đúng 10 mục
+    top_apps = data["top_blocked_apps"]
+    assert len(top_apps) == 10
+    # Xếp hạng 1 phải là game_12.exe với 24 lần
+    assert top_apps[0]["name"] == "game_12.exe"
+    assert top_apps[0]["count"] == 24
+    assert top_apps[1]["name"] == "game_11.exe"
+    assert top_apps[1]["count"] == 22
+    # Mục thứ 10 là game_3.exe với 6 lần
+    assert top_apps[9]["name"] == "game_3.exe"
+    assert top_apps[9]["count"] == 6
+
+    # Kiểm tra top_blocked_webs: đúng 10 mục
+    top_webs = data["top_blocked_webs"]
+    assert len(top_webs) == 10
+    # Xếp hạng 1 phải là badsite-12.com với 36 lần
+    assert top_webs[0]["name"] == "badsite-12.com"
+    assert top_webs[0]["count"] == 36
+    assert top_webs[9]["name"] == "badsite-3.com"
+    assert top_webs[9]["count"] == 9
+
+
+def test_retention_cleanup_90_days(db_session):
+    """Kiểm tra thời hạn lưu trữ log 90 ngày: dọn sạch bản ghi >90 ngày và giữ bản ghi <=90 ngày."""
+    parent, child, device = _setup_child_and_device(db_session)
+    now = datetime.utcnow()
+
+    # 1. Bản ghi CŨ QUÁ 90 ngày (95 ngày trước)
+    old_time = now - timedelta(days=95)
+    ev_old = models.EventLog(
+        idempotency_key="ev_old_95d",
+        device_id=device.id,
+        child_id=child.id,
+        event_type="screen_time",
+        duration_sec=1200,
+        created_at=old_time,
+    )
+    audit_old = models.AuditLog(
+        actor_type="parent",
+        actor_id=parent.id,
+        action="old_action",
+        detail_json="{}",
+        created_at=old_time,
+    )
+    cmd_old = models.Command(
+        device_id=device.id,
+        command_type="lock",
+        payload_json="{}",
+        created_at=old_time,
+    )
+    req_old = models.ChildRequest(
+        child_id=child.id,
+        device_id=device.id,
+        request_type="grant_time",
+        created_at=old_time,
+    )
+    db_session.add_all([ev_old, audit_old, cmd_old, req_old])
+
+    # 2. Bản ghi MỚI TRONG VÒNG 90 ngày (20 ngày trước)
+    recent_time = now - timedelta(days=20)
+    ev_recent = models.EventLog(
+        idempotency_key="ev_recent_20d",
+        device_id=device.id,
+        child_id=child.id,
+        event_type="screen_time",
+        duration_sec=800,
+        created_at=recent_time,
+    )
+    audit_recent = models.AuditLog(
+        actor_type="parent",
+        actor_id=parent.id,
+        action="recent_action",
+        detail_json="{}",
+        created_at=recent_time,
+    )
+    cmd_recent = models.Command(
+        device_id=device.id,
+        command_type="unlock",
+        payload_json="{}",
+        created_at=recent_time,
+    )
+    req_recent = models.ChildRequest(
+        child_id=child.id,
+        device_id=device.id,
+        request_type="grant_time",
+        created_at=recent_time,
+    )
+    db_session.add_all([ev_recent, audit_recent, cmd_recent, req_recent])
+    db_session.commit()
+
+    old_ev_id = ev_old.id
+    old_audit_id = audit_old.id
+    old_cmd_id = cmd_old.id
+    old_req_id = req_old.id
+    recent_ev_id = ev_recent.id
+    recent_audit_id = audit_recent.id
+    recent_cmd_id = cmd_recent.id
+    recent_req_id = req_recent.id
+
+    # Thực hiện tác vụ dọn dẹp log quá 90 ngày
+    res = cleanup_old_logs(db_session, days=90)
+    assert res["deleted_events"] >= 1
+    assert res["deleted_audit"] >= 1
+    assert res["deleted_commands"] >= 1
+    assert res["deleted_requests"] >= 1
+
+    # Dọn dẹp session identity map để query trực tiếp từ DB
+    db_session.expunge_all()
+
+    # Kiểm tra DB: bản ghi cũ phải biến mất
+    assert db_session.query(models.EventLog).filter(models.EventLog.id == old_ev_id).first() is None
+    assert db_session.query(models.AuditLog).filter(models.AuditLog.id == old_audit_id).first() is None
+    assert db_session.query(models.Command).filter(models.Command.id == old_cmd_id).first() is None
+    assert db_session.query(models.ChildRequest).filter(models.ChildRequest.id == old_req_id).first() is None
+
+    # Bản ghi mới còn nguyên
+    assert db_session.query(models.EventLog).filter(models.EventLog.id == recent_ev_id).first() is not None
+    assert db_session.query(models.AuditLog).filter(models.AuditLog.id == recent_audit_id).first() is not None
+    assert db_session.query(models.Command).filter(models.Command.id == recent_cmd_id).first() is not None
+    assert db_session.query(models.ChildRequest).filter(models.ChildRequest.id == recent_req_id).first() is not None
+
+
+def test_purge_child_data_server_and_agent_cache(client, db_session, tmp_path):
+    """Kiểm tra nút 'Xóa toàn bộ dữ liệu của con tôi': xóa đồng thời trên Server và bộ đệm Agent."""
+    parent, child, device = _setup_child_and_device(db_session)
+    now = datetime.utcnow()
+
+    # Tạo một số EventLog và ChildRequest trên server
+    ev = models.EventLog(
+        idempotency_key="ev_to_purge",
+        device_id=device.id,
+        child_id=child.id,
+        event_type="screen_time",
+        duration_sec=3600,
+        created_at=now,
+    )
+    req = models.ChildRequest(
+        child_id=child.id,
+        device_id=device.id,
+        request_type="grant_time",
+        subject="30",
+        created_at=now,
+    )
+    db_session.add_all([ev, req])
+    db_session.commit()
+
+    # Khởi tạo AgentStorage giả lập chứa các event chưa gửi và thời gian dùng tích lũy
+    db_file = tmp_path / "agent_purge_test.db"
+    agent_storage = AgentStorage(db_path=db_file)
+    agent_storage.add_event("screen_time", duration_sec=120)
+    agent_storage.add_event("app_blocked", subject="badapp.exe")
+    agent_storage.add_screen_time(1800)  # 30 phút
+    agent_storage.set_lock_status(True)
+
+    # Đảm bảo trước khi xóa, Agent có dữ liệu đệm
+    assert len(agent_storage.get_pending_events()) == 2
+    assert agent_storage.get_screen_time_today() == 1800
+    assert agent_storage.get_lock_status() is True
+
+    # 1. Gọi API xóa dữ liệu trên Server: POST /reports/{child_id}/purge
+    resp = client.post(f"/reports/{child.id}/purge")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["deleted_events"] >= 1
+    assert data["devices_commanded"] == 1
+
+    # Kiểm tra Server đã xóa sạch EventLog và ChildRequest của bé
+    events_left = db_session.query(models.EventLog).filter(models.EventLog.child_id == child.id).count()
+    requests_left = db_session.query(models.ChildRequest).filter(models.ChildRequest.child_id == child.id).count()
+    assert events_left == 0
+    assert requests_left == 0
+
+    # Kiểm tra lệnh clear_data được tạo cho device
+    cmd = (
+        db_session.query(models.Command)
+        .filter(models.Command.device_id == device.id, models.Command.command_type == "clear_data")
+        .first()
+    )
+    assert cmd is not None
+
+    # 2. Giả lập Agent nhận lệnh clear_data từ Server
+    enforcer = PolicyEnforcer(storage=agent_storage, lock_checker=lambda: False, idle_getter=lambda: 0.0)
+    sync_worker = SyncWorker(
+        storage=agent_storage,
+        enforcer=enforcer,
+        state_config={"server": "localhost", "port": 8443, "device_id": device.id, "access_token": "dummy"},
+        ca_cert_path="",
+    )
+
+    # SyncWorker thực thi lệnh clear_data
+    sync_worker.execute_command(cmd.id, "clear_data", {})
+
+    # 3. Kiểm tra Agent Storage đã được dọn sạch hoàn toàn:
+    assert len(agent_storage.get_pending_events()) == 0
+    assert agent_storage.get_screen_time_today() == 0
+    assert agent_storage.get_lock_status() is False
+
+
+def test_child_today_screen_and_request_time(client, db_session):
+    """Kiểm tra màn hình 'Hôm nay em đã dùng gì' và chức năng xin thêm giờ của trẻ."""
+    parent, child, device = _setup_child_and_device(db_session)
+
+    # Truy cập màn hình Hôm nay em đã dùng gì: /dashboard/child/{child_id}/today
+    resp = client.get(f"/dashboard/child/{child.id}/today")
+    assert resp.status_code == 200
+    html = resp.text
+
+    # Kiểm tra tên bé và các thông điệp ấm áp
+    assert child.display_name in html
+    assert "Phút em đã sử dụng hôm nay" in html
+    assert "3 bí quyết vàng để đôi mắt sáng" in html
+
+    # Trẻ gửi yêu cầu xin thêm 15 phút từ màn hình này
+    resp_req = client.post(
+        "/today/request-time",
+        data={
+            "child_id": child.id,
+            "minutes": 15,
+            "reason": "Con đang làm dở bài vẽ tranh cô giáo giao",
+        },
+        follow_redirects=False,
+    )
+    assert resp_req.status_code == 302
+    assert "requested=1" in resp_req.headers["location"]
+
+    # Kiểm tra yêu cầu được lưu vào bảng ChildRequest
+    req = (
+        db_session.query(models.ChildRequest)
+        .filter(models.ChildRequest.child_id == child.id)
+        .first()
+    )
+    assert req is not None
+    assert req.request_type == "grant_time"
+    assert req.subject == "15"
+    assert "Con đang làm dở bài vẽ" in req.reason
+    assert req.status == "pending"

@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+
+{% block title %}Hôm nay em đã dùng gì · ChildGuard{% endblock %}
+
+{% block content %}
+<div class="kid-container">
+  {% if requested %}
+  <div class="alert alert-success">
+    <span>🎉</span>
+    <span><strong>Tuyệt vời!</strong> Lời nhắn xin thêm giờ của em đã được gửi tới ba mẹ. Em hãy kiên nhẫn đợi ba mẹ duyệt nhé!</span>
+  </div>
+  {% endif %}
+
+  <!-- Kid Hero Banner -->
+  <div class="kid-hero">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
+      <div>
+        <div class="kid-hero-title">Chào bạn nhỏ {{ child.display_name }}! 🌟</div>
+        <div class="kid-hero-sub">Hôm nay chúng mình đã cùng khám phá thế giới máy tính thật kỳ diệu!</div>
+      </div>
+      <div style="font-size: 48px; line-height: 1;">🚀✨</div>
+    </div>
+
+    <div style="margin-top: 14px;">
+      <div class="kid-badge-chip">{{ kid_badge }}</div>
+    </div>
+
+    <div style="margin-top: 18px; background: rgba(0, 0, 0, 0.2); border-radius: var(--radius-md); padding: 14px 18px; font-size: 15px; display: flex; align-items: center; gap: 12px;">
+      <span style="font-size: 24px;">💬</span>
+      <span>{{ kid_message }}</span>
+    </div>
+  </div>
+
+  <!-- Main Stats for Kid -->
+  <div class="kid-stat-grid">
+    <div class="kid-stat-card">
+      <div class="kid-stat-icon">⏱️</div>
+      <div class="kid-stat-num">{{ stats.today_screen_time_minutes }}</div>
+      <div class="kid-stat-label">Phút em đã sử dụng hôm nay</div>
+      <div style="font-size: 12px; color: var(--text-soft); margin-top: 6px;">
+        Hạn mức mỗi ngày: <strong>{{ stats.daily_quota }} phút</strong>
+      </div>
+    </div>
+
+    <div class="kid-stat-card">
+      <div class="kid-stat-icon">⏳</div>
+      <div class="kid-stat-num" style="color: {% if stats.remaining_minutes > 15 %}#10b981{% elif stats.remaining_minutes > 0 %}#f59e0b{% else %}#ef4444{% endif %};">
+        {{ stats.remaining_minutes }}
+      </div>
+      <div class="kid-stat-label">Phút còn lại hôm nay</div>
+      <div style="font-size: 12px; color: var(--text-soft); margin-top: 6px;">
+        {% if stats.remaining_minutes > 0 %}
+          Em nhớ sắp xếp thời gian hợp lý nhé!
+        {% else %}
+          Đã hết giờ dùng máy, hãy thư giãn mắt nha!
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="kid-stat-card">
+      <div class="kid-stat-icon">🛡️</div>
+      <div class="kid-stat-num" style="color: #8b5cf6;">
+        {{ stats.top_blocked_apps|length + stats.top_blocked_webs|length }}
+      </div>
+      <div class="kid-stat-label">Mục ba mẹ giúp em bảo vệ</div>
+      <div style="font-size: 12px; color: var(--text-soft); margin-top: 6px;">
+        Chặn nội dung chưa phù hợp lứa tuổi
+      </div>
+    </div>
+  </div>
+
+  <!-- Time Breakdown by day parts -->
+  <div class="card" style="margin-bottom: 24px;">
+    <div class="card-title">🕒 Em đã dùng máy vào những buổi nào hôm nay?</div>
+    <div class="kid-time-blocks">
+      <div class="kid-block-card">
+        <div style="font-size: 28px; margin-bottom: 4px;">🌅</div>
+        <div class="kid-block-title">Buổi sáng (06:00 - 12:00)</div>
+        <div class="kid-block-val">{{ stats.time_blocks.morning_minutes }} <span style="font-size: 13px; font-weight: normal; color: var(--text-muted);">phút</span></div>
+      </div>
+      <div class="kid-block-card">
+        <div style="font-size: 28px; margin-bottom: 4px;">☀️</div>
+        <div class="kid-block-title">Buổi chiều (12:00 - 18:00)</div>
+        <div class="kid-block-val">{{ stats.time_blocks.afternoon_minutes }} <span style="font-size: 13px; font-weight: normal; color: var(--text-muted);">phút</span></div>
+      </div>
+      <div class="kid-block-card">
+        <div style="font-size: 28px; margin-bottom: 4px;">🌙</div>
+        <div class="kid-block-title">Buổi tối (18:00 - 22:00)</div>
+        <div class="kid-block-val">{{ stats.time_blocks.evening_minutes }} <span style="font-size: 13px; font-weight: normal; color: var(--text-muted);">phút</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Health & Good Habits Tips -->
+  <div class="card" style="margin-bottom: 24px;">
+    <div class="card-title">🌈 3 bí quyết vàng để đôi mắt sáng & khỏe</div>
+    <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 12px;">
+      <div style="display: flex; align-items: flex-start; gap: 12px; padding: 12px; background: var(--bg-surface-elevated); border-radius: var(--radius-sm);">
+        <span style="font-size: 24px;">👀</span>
+        <div>
+          <strong style="color: var(--text-main); font-size: 14px;">Quy tắc 20-20-20:</strong>
+          <div style="font-size: 13px; color: var(--text-muted); margin-top: 2px;">
+            Cứ sau 20 phút nhìn màn hình, em hãy nhìn xa 20 feet (khoảng 6 mét) trong 20 giây để mắt thư giãn nhé!
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: flex-start; gap: 12px; padding: 12px; background: var(--bg-surface-elevated); border-radius: var(--radius-sm);">
+        <span style="font-size: 24px;">🧘</span>
+        <div>
+          <strong style="color: var(--text-main); font-size: 14px;">Tư thế ngồi chuẩn siêu nhân:</strong>
+          <div style="font-size: 13px; color: var(--text-muted); margin-top: 2px;">
+            Lưng thẳng, hai bàn chân chạm sàn, mắt cách màn hình khoảng 50-60cm (bằng một cánh tay của em).
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: flex-start; gap: 12px; padding: 12px; background: var(--bg-surface-elevated); border-radius: var(--radius-sm);">
+        <span style="font-size: 24px;">💧</span>
+        <div>
+          <strong style="color: var(--text-main); font-size: 14px;">Uống nước và chớp mắt:</strong>
+          <div style="font-size: 13px; color: var(--text-muted); margin-top: 2px;">
+            Khi tập trung dùng máy tính, nhớ chớp mắt thường xuyên và uống nước để cơ thể luôn tràn đầy năng lượng!
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Request More Time Section -->
+  <div class="card" style="border: 2px dashed var(--primary); text-align: center; padding: 28px 20px;">
+    <div style="font-size: 36px; margin-bottom: 8px;">🙋‍♂️</div>
+    <div style="font-size: 18px; font-weight: 700; color: var(--text-main);">Em cần thêm thời gian để học bài hay hoàn thành việc gì đó?</div>
+    <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px; max-width: 500px; margin-left: auto; margin-right: auto;">
+      Em có thể gửi lời nhắn lễ phép tới ba mẹ. Ba mẹ sẽ nhận được thông báo ngay trên điện thoại để duyệt giúp em!
+    </div>
+
+    <form action="/today/request-time" method="post" style="margin-top: 18px; display: inline-flex; flex-direction: column; gap: 12px; max-width: 400px; width: 100%;">
+      <input type="hidden" name="child_id" value="{{ child.id }}">
+      <div style="display: flex; gap: 10px; justify-content: center;">
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; background: var(--bg-surface-elevated); padding: 8px 14px; border-radius: var(--radius-sm);">
+          <input type="radio" name="minutes" value="15" checked> Xin +15 phút
+        </label>
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; background: var(--bg-surface-elevated); padding: 8px 14px; border-radius: var(--radius-sm);">
+          <input type="radio" name="minutes" value="30"> Xin +30 phút
+        </label>
+      </div>
+
+      <input type="text" name="reason" placeholder="Lý do (ví dụ: Con làm dở bài tập Toán cô giao...)" style="padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: var(--bg-app); color: var(--text-main); font-size: 13px;">
+
+      <button type="submit" class="btn btn-primary" style="padding: 10px 20px; font-weight: 600;">
+        📨 Gửi lời nhắn xin thêm giờ tới ba mẹ
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

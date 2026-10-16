@@ -133,6 +133,12 @@ class SyncWorker:
         elif cmd_type == "grant_minutes":
             mins = payload.get("minutes", 15)
             self.enforcer.grant_extra_minutes(mins)
+        elif cmd_type in ("clear_data", "clear_child_data"):
+            print(f"[Sync] 🧹 NHẬN LỆNH XÓA TOÀN BỘ BỘ ĐỆM DỮ LIỆU CỦA TRẺ (id={cmd_id})")
+            if hasattr(self.enforcer, "reset_usage_cache"):
+                self.enforcer.reset_usage_cache()
+            elif hasattr(self.storage, "clear_all_cached_data"):
+                self.storage.clear_all_cached_data()
 
         # Gửi ACK về server
         try:

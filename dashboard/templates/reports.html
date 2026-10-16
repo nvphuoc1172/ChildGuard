@@ -3,57 +3,280 @@
 {% block title %}Báo cáo & Thống kê · ChildGuard{% endblock %}
 
 {% block content %}
-<div class="page-header">
+<div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
   <div>
     <h1 class="page-title">Báo cáo & Thống kê hoạt động</h1>
-    <div class="page-title-sub">Tổng hợp thời gian sử dụng, các ứng dụng và trang web bị chặn theo dữ liệu nhật ký sự kiện</div>
+    <div class="page-title-sub">Theo dõi thời lượng sử dụng theo ngày/tuần, danh sách ứng dụng và tên miền bị chặn</div>
+  </div>
+
+  <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+    {% if children and children|length > 1 %}
+    <form method="get" action="/dashboard/reports" style="display: flex; align-items: center; gap: 6px;">
+      <label style="font-size: 13px; color: var(--text-muted);">Chọn bé:</label>
+      <select name="child_id" onchange="this.form.submit()" style="padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: var(--bg-surface); color: var(--text-main); font-size: 13px;">
+        {% for c in children %}
+        <option value="{{ c.id }}" {% if selected_child and selected_child.id == c.id %}selected{% endif %}>{{ c.display_name }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% endif %}
+
+    {% if selected_child %}
+    <a href="/dashboard/child/{{ selected_child.id }}/today" class="btn btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 6px;" title="Xem giao diện Hôm nay em đã dùng gì dành riêng cho bé">
+      <span>🧸</span>
+      <span>Góc nhìn của bé</span>
+    </a>
+    {% endif %}
   </div>
 </div>
 
+{% if purged %}
+<div class="alert alert-success">
+  <span>✓</span>
+  <span><strong>Đã hoàn tất!</strong> Đã xóa toàn bộ dữ liệu sự kiện, báo cáo của con trên Server và phát lệnh xóa sạch bộ nhớ đệm trên máy tính của trẻ.</span>
+</div>
+{% endif %}
+
+{% if cleaned %}
+<div class="alert alert-info">
+  <span>ℹ️</span>
+  <span><strong>Dọn dẹp thành công!</strong> Các bản ghi log, sự kiện, yêu cầu cũ quá {{ retention_days }} ngày đã được xóa tự động theo chính sách lưu trữ.</span>
+</div>
+{% endif %}
+
+<!-- Quick Overview Cards -->
 <div class="cards-grid">
   <div class="card">
     <div class="card-title">⏱️ Thời gian sử dụng hôm nay</div>
     <div style="font-size: 32px; font-weight: 700; color: var(--primary);">
-      {{ stats.today_screen_time_minutes }} <span style="font-size: 16px; font-weight: normal; color: var(--text-muted);">phút</span>
+      {{ stats.today_screen_time_minutes }} <span style="font-size: 16px; font-weight: normal; color: var(--text-muted);">/ {{ stats.daily_quota }} phút</span>
     </div>
     <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
-      Được tính tự động qua EventLog khi Agent trực tuyến hoặc đồng bộ ngoại tuyến.
+      Đã dùng <strong>{{ stats.percent_used }}%</strong> hạn mức cho phép hôm nay (còn lại {{ stats.remaining_minutes }} phút).
     </div>
   </div>
 
   <div class="card">
-    <div class="card-title">🚫 Ứng dụng bị chặn nhiều nhất</div>
+    <div class="card-title">🚫 Ứng dụng bị chặn trong tuần</div>
+    <div style="font-size: 32px; font-weight: 700; color: var(--danger);">
+      {{ stats.top_blocked_apps|length }} <span style="font-size: 16px; font-weight: normal; color: var(--text-muted);">ứng dụng</span>
+    </div>
+    <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+      Top ứng dụng bị bộ lọc Enforcer chặn theo danh sách cấm hoặc ngoài giờ cho phép.
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🌐 Tên miền bị chặn trong tuần</div>
+    <div style="font-size: 32px; font-weight: 700; color: var(--warning);">
+      {{ stats.top_blocked_webs|length }} <span style="font-size: 16px; font-weight: normal; color: var(--text-muted);">tên miền</span>
+    </div>
+    <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+      Top website được DNS Proxy chuyển hướng chặn an toàn.
+    </div>
+  </div>
+</div>
+
+<!-- Biểu đồ thời lượng bé sử dụng máy theo ngày và tuần -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 20px; margin-top: 24px;">
+  <!-- Biểu đồ theo ngày (24 giờ hôm nay) -->
+  <div class="card">
+    <div class="chart-header">
+      <div>
+        <div class="card-title" style="margin-bottom: 2px;">📊 Thời lượng theo ngày (24 giờ hôm nay)</div>
+        <div style="font-size: 12px; color: var(--text-muted);">Số phút sử dụng máy theo từng khung giờ trong ngày hôm nay</div>
+      </div>
+      <span class="badge badge-info">{{ stats.today_screen_time_minutes }} phút</span>
+    </div>
+
+    <div class="chart-bars-wrap" style="height: 170px;">
+      {% for item in stats.hourly_list %}
+      <div class="chart-col">
+        {% if item.minutes > 0 %}
+        <div class="chart-tooltip">{{ item.minutes }}p</div>
+        {% endif %}
+        <div class="chart-track">
+          <div class="chart-val-bar {% if item.minutes > 0 %}highlight{% endif %}" style="height: {{ item.percent }}%;" title="{{ item.hour }}: {{ item.minutes }} phút"></div>
+        </div>
+        <div class="chart-axis-label">{{ item.hour_short }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-soft); margin-top: 8px;">
+      <span>00:00 (Nửa đêm)</span>
+      <span>12:00 (Trưa)</span>
+      <span>23:00 (Đêm)</span>
+    </div>
+  </div>
+
+  <!-- Biểu đồ theo tuần (7 ngày gần nhất) -->
+  <div class="card">
+    <div class="chart-header">
+      <div>
+        <div class="card-title" style="margin-bottom: 2px;">📅 Thời lượng theo tuần (7 ngày gần nhất)</div>
+        <div style="font-size: 12px; color: var(--text-muted);">Tổng thời gian dùng máy tính mỗi ngày trong tuần qua</div>
+      </div>
+      <span class="badge badge-success">7 ngày</span>
+    </div>
+
+    <div class="chart-bars-wrap" style="height: 170px;">
+      {% for item in stats.daily_list %}
+      <div class="chart-col">
+        <div class="chart-tooltip">{{ item.minutes }}p</div>
+        <div class="chart-track">
+          <div class="chart-val-bar" style="height: {{ item.percent }}%; background: linear-gradient(180deg, #3b82f6, #1e40af);" title="{{ item.day }}: {{ item.minutes }} phút"></div>
+        </div>
+        <div class="chart-axis-label" style="font-weight: 600;">{{ item.day }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    <div style="text-align: right; font-size: 11px; color: var(--text-soft); margin-top: 8px;">
+      Đơn vị: phút/ngày
+    </div>
+  </div>
+</div>
+
+<!-- Top 10 Ứng dụng & Top 10 Tên miền bị chặn -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 20px; margin-top: 24px;">
+  <!-- Top 10 Ứng dụng bị chặn -->
+  <div class="card">
+    <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+      <span>🚫 Top 10 Ứng dụng đã bị chặn</span>
+      <span style="font-size: 12px; font-weight: normal; color: var(--text-muted);">Kèm số lần vi phạm</span>
+    </div>
+
     {% if stats.top_blocked_apps %}
-    <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">
+    <ul class="rank-list">
       {% for app in stats.top_blocked_apps %}
-      <li style="display: flex; justify-content: space-between; font-size: 14px;">
-        <span><code>{{ app.name }}</code></span>
-        <span class="badge badge-danger">{{ app.count }} lần</span>
+      <li class="rank-item">
+        <div class="rank-info">
+          <span class="rank-num {% if app.rank == 1 %}rank-1{% elif app.rank == 2 %}rank-2{% elif app.rank == 3 %}rank-3{% else %}rank-other{% endif %}">
+            {{ app.rank }}
+          </span>
+          <span class="rank-name"><code>{{ app.name }}</code></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 80px; height: 6px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden;">
+            <div style="height: 100%; width: {{ app.percent }}%; background: var(--danger); border-radius: 3px;"></div>
+          </div>
+          <span class="badge badge-danger" style="min-width: 65px; text-align: center;">{{ app.count }} lần</span>
+        </div>
       </li>
       {% endfor %}
     </ul>
     {% else %}
-    <div style="color: var(--text-soft); font-size: 13px;">Chưa ghi nhận ứng dụng nào bị chặn.</div>
+    <div style="text-align: center; padding: 32px 16px; color: var(--text-soft); font-size: 13px;">
+      🎉 Chưa ghi nhận ứng dụng nào bị chặn trong tuần này.
+    </div>
     {% endif %}
   </div>
 
+  <!-- Top 10 Tên miền bị chặn -->
   <div class="card">
-    <div class="card-title">🌐 Trang web bị chặn nhiều nhất</div>
+    <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+      <span>🌐 Top 10 Tên miền đã bị chặn</span>
+      <span style="font-size: 12px; font-weight: normal; color: var(--text-muted);">Kèm số lần vi phạm</span>
+    </div>
+
     {% if stats.top_blocked_webs %}
-    <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">
+    <ul class="rank-list">
       {% for web in stats.top_blocked_webs %}
-      <li style="display: flex; justify-content: space-between; font-size: 14px;">
-        <span><code>{{ web.name }}</code></span>
-        <span class="badge badge-warning">{{ web.count }} lần</span>
+      <li class="rank-item">
+        <div class="rank-info">
+          <span class="rank-num {% if web.rank == 1 %}rank-1{% elif web.rank == 2 %}rank-2{% elif web.rank == 3 %}rank-3{% else %}rank-other{% endif %}">
+            {{ web.rank }}
+          </span>
+          <span class="rank-name"><code>{{ web.name }}</code></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 80px; height: 6px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden;">
+            <div style="height: 100%; width: {{ web.percent }}%; background: var(--warning); border-radius: 3px;"></div>
+          </div>
+          <span class="badge badge-warning" style="min-width: 65px; text-align: center;">{{ web.count }} lần</span>
+        </div>
       </li>
       {% endfor %}
     </ul>
     {% else %}
-    <div style="color: var(--text-soft); font-size: 13px;">Chưa ghi nhận trang web nào bị chặn.</div>
+    <div style="text-align: center; padding: 32px 16px; color: var(--text-soft); font-size: 13px;">
+      🎉 Chưa ghi nhận website nào bị chặn trong tuần này.
+    </div>
     {% endif %}
   </div>
 </div>
 
+<!-- Quản lý vòng đời dữ liệu & Quyền riêng tư (Nghị định 13/2023) -->
+<div class="card" style="margin-top: 24px; border: 1px solid rgba(239, 68, 68, 0.3);">
+  <div class="card-title" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+    <span>🛡️ Quản lý vòng đời dữ liệu & Quyền riêng tư của trẻ (Nghị định 13/2023/NĐ-CP)</span>
+    <span class="badge badge-info">Thời hạn lưu trữ: {{ retention_days }} ngày</span>
+  </div>
+
+  <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; margin-top: 12px;">
+    <div style="max-width: 650px; font-size: 13px; color: var(--text-muted); line-height: 1.6;">
+      Hệ thống tự động lưu trữ log, sự kiện, thống kê và báo cáo tối đa trong <strong>90 ngày</strong>.
+      Các dữ liệu quá hạn sẽ được tác vụ nền tự động dọn dẹp hàng ngày. Phụ huynh có toàn quyền thực hiện quyền được xóa dữ liệu cá nhân của con bất cứ lúc nào.
+    </div>
+
+    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+      <form action="/dashboard/action/cleanup-logs" method="post" style="display: inline;">
+        <button type="submit" class="btn btn-sm btn-outline" title="Kích hoạt tác vụ dọn dẹp các dữ liệu cũ quá 90 ngày">
+          🧹 Dọn log > 90 ngày
+        </button>
+      </form>
+
+      {% if selected_child %}
+      <button type="button" class="btn btn-sm btn-danger" onclick="openPurgeModal()" style="display: inline-flex; align-items: center; gap: 6px;">
+        <span>🗑️</span>
+        <span>Xóa toàn bộ dữ liệu của con tôi</span>
+      </button>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Modal xác nhận Xóa toàn bộ dữ liệu của con -->
+{% if selected_child %}
+<div id="purgeModal" class="modal-overlay">
+  <div class="modal-card">
+    <div style="font-size: 32px; margin-bottom: 8px;">⚠️</div>
+    <div style="font-size: 18px; font-weight: 700; color: var(--text-main); margin-bottom: 8px;">
+      Xác nhận xóa toàn bộ dữ liệu của {{ selected_child.display_name }}?
+    </div>
+    <div style="font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 20px;">
+      Hành động này sẽ thực hiện <strong>đồng thời hai chiều</strong>:
+      <ul style="margin: 8px 0 8px 20px;">
+        <li>Xóa hoàn toàn mọi sự kiện sử dụng máy, lịch sử ứng dụng/website bị chặn trên <strong>Server</strong>.</li>
+        <li>Phát lệnh khẩn cấp tới <strong>Agent trên máy tính của bé</strong> để xóa sạch hàng đợi sự kiện cục bộ và đưa thời gian sử dụng hôm nay về 0.</li>
+      </ul>
+      <span style="color: var(--danger); font-weight: 600;">Lưu ý: Dữ liệu đã xóa không thể khôi phục!</span>
+    </div>
+
+    <form action="/dashboard/action/purge-child-data" method="post" style="display: flex; justify-content: flex-end; gap: 10px;">
+      <input type="hidden" name="child_id" value="{{ selected_child.id }}">
+      <button type="button" class="btn btn-outline" onclick="closePurgeModal()">Hủy bỏ</button>
+      <button type="submit" class="btn btn-danger" style="font-weight: 600;">Xác nhận xóa sạch dữ liệu</button>
+    </form>
+  </div>
+</div>
+
+<script>
+  function openPurgeModal() {
+    document.getElementById('purgeModal').classList.add('active');
+  }
+  function closePurgeModal() {
+    document.getElementById('purgeModal').classList.remove('active');
+  }
+  // Đóng modal khi click ra ngoài card
+  document.getElementById('purgeModal').addEventListener('click', function(e) {
+    if (e.target === this) {
+      closePurgeModal();
+    }
+  });
+</script>
+{% endif %}
+
+<!-- Nhật ký sự kiện chi tiết gần nhất -->
 <div class="card" style="margin-top: 24px;">
   <div class="card-title">📜 Nhật ký sự kiện chi tiết gần nhất</div>
   {% if stats.recent_events %}

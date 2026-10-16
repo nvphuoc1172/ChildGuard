@@ -490,6 +490,19 @@ class PolicyEnforcer:
             conn.execute("UPDATE agent_state SET quota_used_seconds = ?, is_locked = 0 WHERE id = 1", (reduced_used,))
             conn.commit()
 
+    def reset_usage_cache(self):
+        """Xóa toàn bộ dữ liệu bộ đệm trên agent khi phụ huynh yêu cầu xóa dữ liệu."""
+        print("[Enforcer] 🧹 RESET TOÀN BỘ DỮ LIỆU SỬ DỤNG VÀ HÀNG ĐỢI SỰ KIỆN THEO LỆNH XÓA DỮ LIỆU.")
+        self.manual_locked = False
+        self._in_grace_period = False
+        self._grace_period_start = None
+        self.grace_seconds_left = 0
+        self._warned_milestones.clear()
+        self.active_notification = None
+        self._subsecond_buffer = 0.0
+        self.storage.clear_all_cached_data()
+        self.unlock_workstation()
+
     def _get_effective_local_datetime(self) -> datetime:
         """Lấy datetime giờ địa phương thực tế (ưu tiên timestamp đồng bộ máy chủ, an toàn với mock/fallback)."""
         try:
