@@ -214,6 +214,13 @@ class AgentStorage:
             conn.execute("DELETE FROM event_queue WHERE sent = 1 AND id IN (" + placeholders + ")", event_ids)
             conn.commit()
 
+    def clear_all_cached_data(self):
+        """Xóa toàn bộ hàng đợi sự kiện và reset bộ đếm thời gian trên Agent (khi phụ huynh yêu cầu xóa dữ liệu)."""
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM event_queue")
+            conn.execute("UPDATE agent_state SET quota_used_seconds = 0, is_locked = 0 WHERE id = 1")
+            conn.commit()
+
     def get_screen_time_today(self) -> int:
         """Lấy số giây đã sử dụng hôm nay (tự reset nếu sang ngày mới theo chuẩn UTC đồng bộ)."""
         today_str = self.get_current_utc_date_str()

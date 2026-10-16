@@ -73,7 +73,7 @@ async def create_command(
     if device is None:
         raise HTTPException(status_code=404, detail="device_not_found")
 
-    if payload.command_type not in ("lock", "unlock", "grant_minutes"):
+    if payload.command_type not in ("lock", "unlock", "grant_minutes", "clear_data", "clear_child_data"):
         raise HTTPException(status_code=400, detail="invalid_command_type")
 
     now = datetime.utcnow()

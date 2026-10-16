@@ -24,6 +24,7 @@ from app import models, security
 from app.database import get_db
 from app.deps import get_optional_parent
 from app.routers.commands import manager
+from app.routers.reports import cleanup_old_logs, get_child_stats_summary
 
 router = APIRouter(tags=["dashboard"])
 
@@ -980,52 +981,41 @@ def requests_page(
 @router.get("/dashboard/reports", response_class=HTMLResponse)
 def reports_page(
     request: Request,
+    child_id: str | None = None,
     db: Session = Depends(get_db),
     parent: models.Parent | None = Depends(get_optional_parent),
 ):
     if not parent:
         return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
 
-    now = datetime.utcnow()
-    today_start = datetime(now.year, now.month, now.day)
-    week_start = today_start - timedelta(days=6)
+    children = db.query(models.Child).filter(models.Child.parent_id == parent.id).all()
+    if not children:
+        children = db.query(models.Child).all()
 
-    events = (
-        db.query(models.EventLog)
-        .filter(models.EventLog.created_at >= week_start)
-        .order_by(models.EventLog.created_at.desc())
-        .all()
-    )
+    selected_child = None
+    if child_id:
+        selected_child = db.get(models.Child, child_id)
+    if not selected_child and children:
+        selected_child = children[0]
 
-    today_screen_time_sec = 0
-    blocked_apps_counter = Counter()
-    blocked_webs_counter = Counter()
-    recent_events = []
+    if selected_child:
+        stats = get_child_stats_summary(selected_child.id, db)
+    else:
+        stats = {
+            "today_screen_time_minutes": 0,
+            "daily_quota": 120,
+            "remaining_minutes": 120,
+            "percent_used": 0,
+            "hourly_list": [],
+            "daily_list": [],
+            "top_blocked_apps": [],
+            "top_blocked_webs": [],
+            "recent_events": [],
+            "time_blocks": {"morning_minutes": 0, "afternoon_minutes": 0, "evening_minutes": 0, "night_minutes": 0},
+        }
 
-    for ev in events:
-        if ev.event_type == "screen_time" and ev.created_at >= today_start:
-            today_screen_time_sec += ev.duration_sec
-        elif ev.event_type == "app_blocked" and ev.subject:
-            blocked_apps_counter[ev.subject] += 1
-        elif ev.event_type == "web_blocked" and ev.subject:
-            blocked_webs_counter[ev.subject] += 1
-
-        if len(recent_events) < 20:
-            recent_events.append(
-                {
-                    "type": ev.event_type,
-                    "subject": ev.subject or "—",
-                    "duration_sec": ev.duration_sec,
-                    "time": ev.created_at.strftime("%H:%M:%S %d/%m"),
-                }
-            )
-
-    stats = {
-        "today_screen_time_minutes": round(today_screen_time_sec / 60, 1),
-        "top_blocked_apps": [{"name": k, "count": v} for k, v in blocked_apps_counter.most_common(5)],
-        "top_blocked_webs": [{"name": k, "count": v} for k, v in blocked_webs_counter.most_common(5)],
-        "recent_events": recent_events,
-    }
+    purged = request.query_params.get("purged")
+    cleaned = request.query_params.get("cleaned")
 
     return templates.TemplateResponse(
         request,
@@ -1033,9 +1023,207 @@ def reports_page(
         {
             "active_page": "reports",
             "current_user": parent,
+            "children": children,
+            "selected_child": selected_child,
             "stats": stats,
+            "purged": purged,
+            "cleaned": cleaned,
+            "retention_days": 90,
         },
     )
+
+
+@router.post("/dashboard/action/purge-child-data")
+async def purge_child_data_action(
+    request: Request,
+    child_id: str = Form(...),
+    db: Session = Depends(get_db),
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """Xóa toàn bộ dữ liệu của con tôi (Server + Agent cache) theo Nghị định 13/2023."""
+    if not parent:
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
+
+    child = db.get(models.Child, child_id)
+    if not child:
+        raise HTTPException(status_code=404, detail="child_not_found")
+
+    # 1. Xóa EventLog & ChildRequest của trẻ trên Server
+    deleted_events = (
+        db.query(models.EventLog)
+        .filter(models.EventLog.child_id == child_id)
+        .delete(synchronize_session=False)
+    )
+    deleted_requests = (
+        db.query(models.ChildRequest)
+        .filter(models.ChildRequest.child_id == child_id)
+        .delete(synchronize_session=False)
+    )
+
+    # 2. Phát lệnh khẩn cấp clear_data tới tất cả thiết bị của trẻ
+    devices = db.query(models.Device).filter(models.Device.child_id == child_id).all()
+    now = datetime.utcnow()
+    for d in devices:
+        cmd = models.Command(
+            device_id=d.id,
+            command_type="clear_data",
+            payload_json=json.dumps({"child_id": child_id, "action": "purge_child_data"}),
+            created_at=now,
+        )
+        db.add(cmd)
+        db.flush()
+        sent = await manager.send_command(
+            d.id,
+            {"command_id": cmd.id, "type": "clear_data", "payload": {"child_id": child_id}},
+        )
+        if sent:
+            cmd.delivered_at = now
+
+    # 3. Ghi AuditLog
+    audit = models.AuditLog(
+        actor_type="parent",
+        actor_id=parent.id,
+        action="purge_child_data",
+        detail_json=json.dumps({
+            "child_id": child_id,
+            "child_name": child.display_name,
+            "deleted_events": deleted_events,
+            "deleted_requests": deleted_requests,
+            "devices_count": len(devices),
+        }),
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
+    return RedirectResponse(
+        url=f"/dashboard/reports?child_id={child_id}&purged=1",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@router.post("/dashboard/action/cleanup-logs")
+def cleanup_logs_action(
+    request: Request,
+    db: Session = Depends(get_db),
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """Kích hoạt dọn dẹp các bản ghi quá 90 ngày."""
+    if not parent:
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
+
+    res = cleanup_old_logs(db, days=90)
+    now = datetime.utcnow()
+    audit = models.AuditLog(
+        actor_type="parent",
+        actor_id=parent.id,
+        action="manual_retention_cleanup",
+        detail_json=json.dumps(res),
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
+    return RedirectResponse(
+        url="/dashboard/reports?cleaned=1",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@router.get("/dashboard/today", response_class=HTMLResponse)
+@router.get("/dashboard/child/{child_id}/today", response_class=HTMLResponse)
+@router.get("/today", response_class=HTMLResponse)
+def child_today_screen(
+    request: Request,
+    child_id: str | None = None,
+    db: Session = Depends(get_db),
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """Màn hình 'Hôm nay em đã dùng gì' cho trẻ — ngôn ngữ đơn giản, hình ảnh minh họa sinh động."""
+    selected_child = None
+    if child_id:
+        selected_child = db.get(models.Child, child_id)
+
+    if not selected_child and parent:
+        selected_child = db.query(models.Child).filter(models.Child.parent_id == parent.id).first()
+
+    if not selected_child:
+        selected_child = db.query(models.Child).first()
+
+    if not selected_child:
+        raise HTTPException(status_code=404, detail="child_not_found")
+
+    stats = get_child_stats_summary(selected_child.id, db)
+
+    # Đưa ra thông điệp thân thiện theo thời lượng đã dùng
+    quota_min = stats["daily_quota"]
+    rem_min = stats["remaining_minutes"]
+
+    if rem_min <= 0:
+        kid_mood = "completed"
+        kid_message = "Em đã dùng hết thời gian hôm nay rồi! Hãy nghỉ ngơi, uống nước và vận động nhé! ⚽📚"
+        kid_badge = "🏆 Bé xuất sắc hoàn thành mục tiêu ngày!"
+    elif rem_min <= 15:
+        kid_mood = "warning"
+        kid_message = f"Sắp hết giờ rồi em nhé! Em còn khoảng {int(rem_min)} phút, hãy chuẩn bị lưu bài tập nhé! 💾⏰"
+        kid_badge = "⭐ Bé chăm chỉ & giữ gìn đôi mắt!"
+    else:
+        kid_mood = "good"
+        kid_message = f"Em vẫn còn {int(rem_min)} phút vui học hôm nay! Nhớ ngồi thẳng lưng và cách màn hình 50cm nhé! 👀✨"
+        kid_badge = "🚀 Nhà thám hiểm công nghệ ngoan ngoãn!"
+
+    requested = request.query_params.get("requested")
+
+    return templates.TemplateResponse(
+        request,
+        "child_today.html",
+        {
+            "child": selected_child,
+            "stats": stats,
+            "kid_mood": kid_mood,
+            "kid_message": kid_message,
+            "kid_badge": kid_badge,
+            "requested": requested,
+            "is_parent_logged_in": parent is not None,
+            "current_user": parent,
+            "active_page": "today",
+        },
+    )
+
+
+@router.post("/today/request-time")
+def child_request_time_action(
+    request: Request,
+    child_id: str = Form(...),
+    minutes: int = Form(15),
+    reason: str = Form("Con cần thêm thời gian để hoàn thành bài tập"),
+    db: Session = Depends(get_db),
+):
+    """Trẻ gửi yêu cầu xin thêm giờ từ màn hình 'Hôm nay em đã dùng gì'."""
+    child = db.get(models.Child, child_id)
+    if not child:
+        raise HTTPException(status_code=404, detail="child_not_found")
+
+    device = db.query(models.Device).filter(models.Device.child_id == child_id).first()
+    device_id = device.id if device else "web_portal"
+    now = datetime.utcnow()
+    req = models.ChildRequest(
+        child_id=child.id,
+        device_id=device_id,
+        request_type="grant_time",
+        subject=str(minutes),
+        reason=reason.strip() or "Bé xin thêm thời gian từ màn hình Hôm nay em đã dùng gì",
+        status="pending",
+        created_at=now,
+    )
+    db.add(req)
+    db.commit()
+
+    return RedirectResponse(
+        url=f"/dashboard/today?child_id={child_id}&requested=1",
+        status_code=status.HTTP_302_FOUND,
+    )
+
 
 
 @router.get("/dashboard/audit", response_class=HTMLResponse)

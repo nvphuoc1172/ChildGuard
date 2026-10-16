@@ -27,13 +27,38 @@ from app.routers import (
 DASHBOARD_DIR = Path(__file__).resolve().parent.parent.parent / "dashboard"
 
 
+import asyncio
+from app.database import Base, auto_migrate, engine, SessionLocal
+from app.routers.reports import cleanup_old_logs
+
+async def _periodic_retention_cleanup():
+    """Tác vụ tự động dọn dẹp dữ liệu cũ quá 90 ngày định kỳ mỗi 24 giờ."""
+    while True:
+        try:
+            with SessionLocal() as db:
+                cleanup_old_logs(db, days=90)
+        except Exception:
+            pass
+        await asyncio.sleep(86400)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Dev-only: tạo bảng trực tiếp từ models. Khi dự án lớn hơn, thay bằng
     # Alembic migrations (thư mục server/migrations/ đã có trong cấu trúc).
     Base.metadata.create_all(bind=engine)
     auto_migrate(engine)
+
+    # Tự động dọn dẹp các bản ghi quá 90 ngày khi khởi động
+    try:
+        with SessionLocal() as db:
+            cleanup_old_logs(db, days=90)
+    except Exception:
+        pass
+
+    cleanup_task = asyncio.create_task(_periodic_retention_cleanup())
     yield
+    cleanup_task.cancel()
 
 
 
