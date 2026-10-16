@@ -290,6 +290,43 @@ class TrayApp:
 
         threading.Thread(target=_open, daemon=True).start()
 
+    def show_toast_banner(self, notif: dict):
+        """Hiển thị cửa sổ banner thông báo nổi bật trên màn hình cho trẻ."""
+        if not tk:
+            return
+
+        def _popup():
+            try:
+                root = tk.Tk()
+                root.overrideredirect(True)
+                root.attributes("-topmost", True)
+                bg_color = "#b91c1c" if notif.get("level") == "grace_period" else ("#ea580c" if notif.get("level") == "urgent" else "#1e293b")
+                root.configure(bg=bg_color)
+
+                sw = root.winfo_screenwidth()
+                sh = root.winfo_screenheight()
+                w, h = 420, 130
+                root.geometry(f"{w}x{h}+{sw - w - 24}+{sh - h - 60}")
+
+                frame = tk.Frame(root, bg=bg_color, padx=14, pady=12)
+                frame.pack(fill="both", expand=True)
+
+                title_lbl = tk.Label(frame, text=notif.get("title", "ChildGuard"), font=("Segoe UI", 12, "bold"), fg="white", bg=bg_color)
+                title_lbl.pack(anchor="w")
+
+                msg_lbl = tk.Label(frame, text=notif.get("message", ""), font=("Segoe UI", 10), fg="#f1f5f9", bg=bg_color, wraplength=380, justify="left")
+                msg_lbl.pack(anchor="w", pady=4)
+
+                btn_close = tk.Button(frame, text="Đã hiểu / Lưu bài", font=("Segoe UI", 9, "bold"), bg="#0f172a", fg="white", padx=10, pady=2, relief="flat", command=root.destroy)
+                btn_close.pack(anchor="e")
+
+                root.after(10000, lambda: root.destroy() if root.winfo_exists() else None)
+                root.mainloop()
+            except Exception:
+                pass
+
+        threading.Thread(target=_popup, daemon=True).start()
+
     def run(self):
         if not pystray:
             print("[Tray] Thư viện pystray chưa được cài đặt. Tray UI chạy ở chế độ fallback.")
@@ -306,6 +343,11 @@ class TrayApp:
             used = st.get("used_minutes", 0)
             is_locked = st.get("is_locked", False)
             is_idle = st.get("is_idle", False)
+            in_grace = st.get("in_grace_period", False)
+            grace_left = st.get("grace_seconds_left", 0)
+
+            if in_grace:
+                return f"⚠️ Ân hạn lưu bài: Còn {grace_left} giây!"
             if is_locked or rem <= 0:
                 return f"🔒 Đã khóa (Còn lại: 0/{quota} phút)"
             if is_idle:
@@ -335,7 +377,12 @@ class TrayApp:
                         quota = st.get("daily_quota", 0)
                         is_locked = st.get("is_locked", False)
                         is_idle = st.get("is_idle", False)
-                        if is_locked or rem <= 0:
+                        in_grace = st.get("in_grace_period", False)
+                        grace_left = st.get("grace_seconds_left", 0)
+
+                        if in_grace:
+                            status_str = f"Ân hạn {grace_left}s"
+                        elif is_locked or rem <= 0:
                             status_str = "Đã khóa"
                         elif is_idle:
                             status_str = "Tạm dừng"
@@ -344,6 +391,18 @@ class TrayApp:
                         self.icon.title = f"ChildGuard — {status_str} ({rem}/{quota} phút)"
                         self.icon.menu = _build_menu()
                         self.icon.update_menu()
+
+                        # Xử lý hiển thị thông báo mới
+                        notif = st.get("active_notification")
+                        if notif and notif.get("id") != getattr(self, "_last_notif_id", None):
+                            self._last_notif_id = notif.get("id")
+                            msg = notif.get("message", "")
+                            title = notif.get("title", "ChildGuard")
+                            try:
+                                self.icon.notify(msg, title)
+                            except Exception:
+                                pass
+                            self.show_toast_banner(notif)
                     except Exception:
                         pass
 

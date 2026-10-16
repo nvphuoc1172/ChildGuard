@@ -38,6 +38,11 @@ class IPCHandler(BaseHTTPRequestHandler):
             is_idle = getattr(self.enforcer, "is_idle", False) if self.enforcer else False
             idle_seconds = getattr(self.enforcer, "current_idle_seconds", 0.0) if self.enforcer else 0.0
             workstation_locked = getattr(self.enforcer, "is_locked_screen", False) if self.enforcer else False
+            in_grace_period = getattr(self.enforcer, "_in_grace_period", False) if self.enforcer else False
+            grace_seconds_left = getattr(self.enforcer, "grace_seconds_left", 0) if self.enforcer else 0
+            active_notification = getattr(self.enforcer, "active_notification", None) if self.enforcer else None
+            effective_rem_sec = getattr(self.enforcer, "effective_remaining_seconds", 0) if self.enforcer else 0
+            effective_res_type = getattr(self.enforcer, "effective_restriction_type", "none") if self.enforcer else "none"
 
             status_data = {
                 "daily_quota": daily_quota,
@@ -48,6 +53,11 @@ class IPCHandler(BaseHTTPRequestHandler):
                 "is_idle": is_idle,
                 "idle_seconds": round(idle_seconds, 1),
                 "workstation_locked": workstation_locked,
+                "in_grace_period": in_grace_period,
+                "grace_seconds_left": grace_seconds_left,
+                "active_notification": active_notification,
+                "effective_remaining_seconds": effective_rem_sec,
+                "effective_restriction_type": effective_res_type,
                 "policy": policy,
             }
 
@@ -56,6 +66,13 @@ class IPCHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(status_data).encode("utf-8"))
+        elif self.path == "/notifications":
+            history = getattr(self.enforcer, "notification_history", []) if self.enforcer else []
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"notifications": history}).encode("utf-8"))
         else:
             self.send_response(404)
             self.end_headers()

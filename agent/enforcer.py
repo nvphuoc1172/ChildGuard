@@ -16,7 +16,7 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
@@ -322,6 +322,22 @@ def get_idle_seconds() -> float:
     return 0.0
 
 
+def show_windows_popup(title: str, message: str, level: str = "warning"):
+    """Hiển thị thông báo trên màn hình Windows (chạy trong luồng riêng không block)."""
+    if sys.platform != "win32":
+        print(f"[Windows Notification] 📢 [{title}] {message}")
+        return
+    try:
+        icon_flag = 0x00000030 if level in ("warning", "urgent", "grace_period") else 0x00000040
+        flags = icon_flag | 0x00040000 | 0x00010000 | 0x00200000
+        threading.Thread(
+            target=lambda: ctypes.windll.user32.MessageBoxW(0, message, title, flags),
+            daemon=True,
+        ).start()
+    except Exception as e:
+        print(f"[Windows Notification] Lỗi hiển thị MessageBox: {e}")
+
+
 class PolicyEnforcer:
     def __init__(
         self,
@@ -329,6 +345,7 @@ class PolicyEnforcer:
         known_system_hashes: dict[str, str] | None = None,
         lock_checker=None,
         idle_getter=None,
+        notifier=None,
     ):
         self.storage = storage
         self.known_system_hashes = (
@@ -336,6 +353,7 @@ class PolicyEnforcer:
         )
         self._lock_checker = lock_checker or self.is_workstation_locked
         self._idle_getter = idle_getter or get_idle_seconds
+        self._notifier = notifier or self._default_notifier
         self.running = False
         self.manual_locked = False
         self.is_idle = False
@@ -346,6 +364,66 @@ class PolicyEnforcer:
         self._subsecond_buffer = 0.0
         self._screen_time_buffer = 0
         self._last_lock_time = 0.0
+
+        # Trạng thái cảnh báo trước 10, 5, 1 phút và ân hạn 60 giây
+        self._warned_milestones: set[int] = set()
+        self._in_grace_period: bool = False
+        self._grace_period_start: float | None = None
+        self.grace_seconds_left: int = 0
+        self.active_notification: dict | None = None
+        self.notification_history: list[dict] = []
+        self.effective_remaining_seconds: int = 0
+        self.effective_restriction_type: str = "none"
+
+    def _default_notifier(self, notif: dict):
+        """Bộ phát thông báo mặc định: in log console và kích hoạt popup trên Windows."""
+        print(f"[Enforcer Notifier] 📢 [{notif.get('title')}] {notif.get('message')}")
+        show_windows_popup(
+            title=notif.get("title", "ChildGuard"),
+            message=notif.get("message", ""),
+            level=notif.get("level", "warning"),
+        )
+
+    def _emit_warning(
+        self,
+        milestone: int,
+        remaining_seconds: int,
+        restriction_type: str,
+        title: str,
+        message: str,
+        level: str = "warning",
+    ) -> dict:
+        """Tạo và phát thông báo cảnh báo/ân hạn."""
+        notif = {
+            "id": f"notif_{int(time.time() * 1000)}",
+            "milestone": milestone,
+            "remaining_seconds": remaining_seconds,
+            "restriction_type": restriction_type,
+            "title": title,
+            "message": message,
+            "level": level,
+            "in_grace_period": self._in_grace_period,
+            "grace_seconds_left": self.grace_seconds_left,
+            "created_at": datetime.now().isoformat(),
+        }
+        self.active_notification = notif
+        self.notification_history.append(notif)
+        if len(self.notification_history) > 50:
+            self.notification_history = self.notification_history[-50:]
+
+        try:
+            subj = f"grace_60s_{restriction_type}" if milestone == 0 else f"warn_{milestone}m_{restriction_type}"
+            self.storage.add_event(event_type="time_warning", subject=subj, duration_sec=remaining_seconds)
+        except Exception:
+            pass
+
+        if self._notifier:
+            try:
+                self._notifier(notif)
+            except Exception as e:
+                print(f"[Enforcer] Lỗi trong notifier callback: {e}")
+
+        return notif
 
     @staticmethod
     def is_workstation_locked() -> bool:
@@ -390,12 +468,22 @@ class PolicyEnforcer:
         """Mở khóa máy (cho phép tiếp tục dùng)."""
         print("[Enforcer] 🔓 MỞ KHÓA MÁY THEO LỆNH.")
         self.manual_locked = False
+        self._in_grace_period = False
+        self._grace_period_start = None
+        self.grace_seconds_left = 0
+        self._warned_milestones.clear()
+        self.active_notification = None
         self.storage.set_lock_status(False)
 
     def grant_extra_minutes(self, minutes: int):
         """Cộng thêm thời gian cho trẻ: giảm số giây đã tính hôm nay để trẻ có thêm thời gian."""
         print(f"[Enforcer] ⏱️ CỘNG THÊM {minutes} PHÚT CHO TRẺ.")
         self.manual_locked = False
+        self._in_grace_period = False
+        self._grace_period_start = None
+        self.grace_seconds_left = 0
+        self._warned_milestones.clear()
+        self.active_notification = None
         current_used = self.storage.get_screen_time_today()
         reduced_used = max(0, current_used - (minutes * 60))
         with self.storage._get_connection() as conn:
@@ -459,6 +547,178 @@ class PolicyEnforcer:
                 return now_time >= start_str or now_time <= end_str
         except Exception:
             return True
+
+    def get_schedule_remaining_seconds(self, schedule: dict, now_dt: datetime | None = None) -> int | None:
+        """Tính số giây còn lại trong khung giờ cho phép của lịch biểu hiện tại.
+
+        Trả về:
+          - int >= 0: Số giây còn lại trước khi kết thúc khung giờ cho phép.
+          - None: Không cấu hình lịch biểu (cho phép không giới hạn theo lịch).
+        """
+        if not schedule:
+            return None
+
+        if now_dt is None or not isinstance(now_dt, datetime):
+            now_dt = self._get_effective_local_datetime()
+
+        matrix = schedule.get("matrix")
+        # 1. Ma trận lịch tuần 7x48
+        if matrix and isinstance(matrix, list) and len(matrix) == 7:
+            day = now_dt.weekday()
+            slot = now_dt.hour * 2 + (now_dt.minute // 30)
+            if not (0 <= day < 7 and 0 <= slot < 48):
+                return 0
+
+            day_slots = matrix[day]
+            if not (isinstance(day_slots, list) and len(day_slots) == 48):
+                return None
+
+            # Nếu slot hiện tại đang bị khóa -> còn 0 giây
+            if not bool(day_slots[slot]):
+                return 0
+
+            # Tính số giây còn lại trong slot 30 phút hiện tại
+            minute_in_slot = now_dt.minute % 30
+            sec_left_curr_slot = (30 - minute_in_slot) * 60 - now_dt.second
+            total_sec = max(0, sec_left_curr_slot)
+
+            # Quét các slot tiếp theo liên tục còn được phép (== 1)
+            curr_day = day
+            curr_slot = slot + 1
+            for _ in range(48 * 7):
+                if curr_slot >= 48:
+                    curr_slot = 0
+                    curr_day = (curr_day + 1) % 7
+
+                next_day_slots = matrix[curr_day]
+                if isinstance(next_day_slots, list) and len(next_day_slots) == 48 and bool(next_day_slots[curr_slot]):
+                    total_sec += 30 * 60
+                    curr_slot += 1
+                else:
+                    break
+
+            return total_sec
+
+        # 2. Khung giờ start_time - end_time (fallback)
+        start_str = schedule.get("start_time")
+        end_str = schedule.get("end_time")
+        if not start_str or not end_str:
+            return None
+
+        try:
+            now_time = now_dt.strftime("%H:%M")
+            if not self.check_schedule(schedule, now_dt):
+                return 0
+
+            end_parts = end_str.split(":")
+            end_hour, end_minute = int(end_parts[0]), int(end_parts[1])
+            end_dt = now_dt.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+
+            if start_str <= end_str:
+                diff = (end_dt - now_dt).total_seconds()
+                return max(0, int(diff))
+            else:
+                if now_time >= start_str:
+                    end_dt += timedelta(days=1)
+                diff = (end_dt - now_dt).total_seconds()
+                return max(0, int(diff))
+        except Exception:
+            return None
+
+    def get_quota_remaining_seconds(self, policy: dict) -> int | None:
+        """Tính số giây còn lại theo hạn mức ngày (Quota)."""
+        quota = policy.get("quota", {})
+        daily_minutes = quota.get("daily_minutes")
+        if daily_minutes is None:
+            return None
+        daily_limit_sec = int(daily_minutes) * 60
+        used_seconds = self.storage.get_screen_time_today()
+        return max(0, daily_limit_sec - used_seconds)
+
+    def get_effective_remaining_seconds(self, policy: dict, now_dt: datetime | None = None) -> tuple[int, str]:
+        """Tính số giây còn lại thực tế và lý do tương ứng (hạn mức ngày hoặc lịch biểu).
+
+        Trả về: (remaining_seconds, restriction_type)
+        restriction_type: "quota" | "schedule" | "none"
+        """
+        if now_dt is None or not isinstance(now_dt, datetime):
+            now_dt = self._get_effective_local_datetime()
+
+        quota_rem = self.get_quota_remaining_seconds(policy)
+        sched_rem = self.get_schedule_remaining_seconds(policy.get("schedule", {}), now_dt)
+
+        if quota_rem is not None and sched_rem is not None:
+            if sched_rem < quota_rem:
+                return sched_rem, "schedule"
+            else:
+                return quota_rem, "quota"
+        elif quota_rem is not None:
+            return quota_rem, "quota"
+        elif sched_rem is not None:
+            return sched_rem, "schedule"
+        else:
+            return 86400, "none"
+
+    def check_and_emit_warnings(self, policy: dict, now_dt: datetime | None = None):
+        """Kiểm tra và phát cảnh báo trước 10, 5, 1 phút."""
+        rem_sec, res_type = self.get_effective_remaining_seconds(policy, now_dt)
+
+        if res_type == "none":
+            return
+
+        reason_str = "Hạn mức ngày" if res_type == "quota" else "Lịch tuần"
+
+        # Nếu thời gian còn lại tăng lên (ví dụ: phụ huynh cấp thêm giờ hoặc đổi lịch)
+        if rem_sec > 600:
+            self._warned_milestones.clear()
+            self._in_grace_period = False
+            self._grace_period_start = None
+        elif rem_sec > 300:
+            self._warned_milestones.discard(5)
+            self._warned_milestones.discard(1)
+            self._in_grace_period = False
+            self._grace_period_start = None
+        elif rem_sec > 60:
+            self._warned_milestones.discard(1)
+            self._in_grace_period = False
+            self._grace_period_start = None
+
+        # Kiểm tra các mốc cảnh báo 10, 5, 1 phút
+        if 0 < rem_sec <= 60:
+            if 1 not in self._warned_milestones:
+                self._warned_milestones.update({10, 5, 1})
+                self._emit_warning(
+                    milestone=1,
+                    remaining_seconds=rem_sec,
+                    restriction_type=res_type,
+                    title="⚠️ ChildGuard — SẮP HẾT GIỜ (Còn 1 phút)",
+                    message=f"Chỉ còn 1 phút nữa máy tính sẽ bị khóa ({reason_str})! Hãy lưu bài ngay bây giờ!",
+                    level="urgent",
+                )
+        elif 60 < rem_sec <= 300:
+            if 5 not in self._warned_milestones:
+                self._warned_milestones.update({10, 5})
+                mins_text = max(1, round(rem_sec / 60))
+                self._emit_warning(
+                    milestone=5,
+                    remaining_seconds=rem_sec,
+                    restriction_type=res_type,
+                    title="ChildGuard — Cảnh báo sắp hết giờ (Còn 5 phút)",
+                    message=f"Bạn còn {mins_text} phút sử dụng máy tính ({reason_str})! Vui lòng lưu các bài làm và tài liệu dở dang.",
+                    level="warning",
+                )
+        elif 300 < rem_sec <= 600:
+            if 10 not in self._warned_milestones:
+                self._warned_milestones.add(10)
+                mins_text = max(1, round(rem_sec / 60))
+                self._emit_warning(
+                    milestone=10,
+                    remaining_seconds=rem_sec,
+                    restriction_type=res_type,
+                    title="ChildGuard — Cảnh báo thời gian (Còn 10 phút)",
+                    message=f"Bạn còn {mins_text} phút sử dụng máy tính ({reason_str}). Hãy chuẩn bị hoàn thành công việc!",
+                    level="info",
+                )
 
     def scan_and_enforce_processes(self, policy: dict):
         """Quét tiến trình đang chạy và thực thi chính sách cho phép / chặn ứng dụng kèm đối chiếu SHA-256."""
@@ -530,28 +790,74 @@ class PolicyEnforcer:
         self.current_idle_seconds = idle_sec
         self.is_idle = (idle_sec >= 300.0)
 
-        # 3. Kiểm tra điều kiện khóa máy
+        # 3. Đánh giá cảnh báo trước 10, 5, 1 phút
+        rem_sec, res_type = self.get_effective_remaining_seconds(policy)
+        self.effective_remaining_seconds = rem_sec
+        self.effective_restriction_type = res_type
+        self.check_and_emit_warnings(policy)
+
+        # 4. Kiểm tra điều kiện khóa máy & Khoảng ân hạn 60 giây để trẻ lưu bài
         used_seconds = self.storage.get_screen_time_today()
         in_schedule = self.check_schedule(schedule)
         quota_exceeded = used_seconds >= daily_limit_sec
+        time_expired = quota_exceeded or (not in_schedule) or (rem_sec <= 0 and res_type != "none")
 
-        should_lock = self.manual_locked or quota_exceeded or (not in_schedule)
+        should_lock = False
+        lock_reason = ""
+        is_already_locked = self.storage.get_lock_status()
+
+        if self.manual_locked:
+            should_lock = True
+            lock_reason = "Khóa theo lệnh phụ huynh"
+            self._in_grace_period = False
+            self._grace_period_start = None
+            self.grace_seconds_left = 0
+        elif time_expired:
+            if is_already_locked and workstation_locked:
+                # Máy đã khóa từ trước trên Lock Screen -> giữ nguyên trạng thái khóa
+                should_lock = True
+                if quota_exceeded:
+                    lock_reason = f"Đã hết hạn mức ngày ({used_seconds}/{daily_limit_sec}s)"
+                else:
+                    day_names = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
+                    now_dt = self._get_effective_local_datetime()
+                    lock_reason = f"Ngoài khung giờ cho phép ({day_names[now_dt.weekday()]} lúc {now_dt.strftime('%H:%M')} - Lịch tuần 7x48) -> Khóa máy trong 5s"
+            else:
+                # Trẻ đang sử dụng trên Desktop và vừa chạm mốc hết giờ:
+                # KÍCH HOẠT KHOẢNG ÂN HẠN 60 GIÂY ĐỂ LƯU BÀI!
+                if not self._in_grace_period:
+                    self._in_grace_period = True
+                    self._grace_period_start = now
+                    self.grace_seconds_left = 60
+                    res_type_name = "Hạn mức ngày" if quota_exceeded else "Khung giờ cho phép"
+                    self._emit_warning(
+                        milestone=0,
+                        remaining_seconds=0,
+                        restriction_type=res_type,
+                        title="⚠️ ChildGuard — ÂN HẠN 60 GIÂY ĐỂ LƯU BÀI",
+                        message=f"{res_type_name} đã hết! Bạn có 60 giây ân hạn để lưu bài và tài liệu. Máy sẽ khóa sau 60 giây.",
+                        level="grace_period",
+                    )
+                    should_lock = False  # CHƯA KHÓA MÁY để trẻ lưu bài
+                else:
+                    elapsed_grace = now - (self._grace_period_start or now)
+                    if elapsed_grace < 60.0:
+                        self.grace_seconds_left = max(0, int(60.0 - elapsed_grace))
+                        should_lock = False  # Tiếp tục cho trẻ lưu bài trong 60 giây
+                    else:
+                        # Đã hết 60 giây ân hạn -> Khóa máy!
+                        self._in_grace_period = False
+                        self.grace_seconds_left = 0
+                        should_lock = True
+                        res_type_name = "Hạn mức ngày" if quota_exceeded else "Khung giờ quy định"
+                        lock_reason = f"Hết thời gian ân hạn 60 giây để lưu bài ({res_type_name})"
+        else:
+            # Chưa hết giờ và đang trong khung giờ hợp lệ:
+            self._in_grace_period = False
+            self._grace_period_start = None
+            self.grace_seconds_left = 0
 
         if should_lock:
-            is_already_locked = self.storage.get_lock_status()
-            if self.manual_locked:
-                lock_reason = "Khóa theo lệnh phụ huynh"
-            elif quota_exceeded:
-                lock_reason = f"Đã hết hạn mức ngày ({used_seconds}/{daily_limit_sec}s)"
-            else:
-                day_names = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
-                now_dt = self._get_effective_local_datetime()
-                lock_reason = f"Ngoài khung giờ cho phép ({day_names[now_dt.weekday()]} lúc {now_dt.strftime('%H:%M')} - Lịch tuần 7x48) -> Khóa máy trong 5s"
-
-            # Kiểm tra hành động khóa:
-            # - Nếu chưa ở trạng thái khóa: khóa ngay lập tức!
-            # - Nếu đã từng khóa nhưng màn hình đang mở (trẻ đăng nhập lại),
-            #   hoặc đã quá 5 giây kể từ lần khóa trước: khóa lại ngay (đảm bảo trong 5s)!
             needs_lock_action = False
             if not is_already_locked:
                 needs_lock_action = True
@@ -564,12 +870,12 @@ class PolicyEnforcer:
             if needs_lock_action:
                 self.lock_workstation(reason=lock_reason)
         else:
-            # Đang trong hạn mức và trong khung giờ hợp lệ -> Nếu trước đó từng bị khóa thì mở lại
-            if self.storage.get_lock_status():
+            # Đang trong hạn mức hoặc đang trong ân hạn -> Nếu trước đó từng bị đánh dấu khóa thì giải phóng
+            if not self._in_grace_period and self.storage.get_lock_status():
                 print("[Enforcer] 🔓 Đủ điều kiện sử dụng máy -> Giải phóng trạng thái khóa.")
                 self.storage.set_lock_status(False)
 
-            # 4. Đếm thời gian sử dụng thực (Screen-time Counter):
+            # 5. Đếm thời gian sử dụng thực (Screen-time Counter):
             # - Không tính khi máy khóa (workstation_locked == True)
             # - Không tính khi không có thao tác quá 5 phút (self.is_idle == True)
             # - Sử dụng bộ tích lũy sub-second float để triệt tiêu sai số làm tròn (sai số <= +-1s/giờ << +-30s)
@@ -589,11 +895,6 @@ class PolicyEnforcer:
                             policy_version=policy.get("version"),
                         )
                         self._screen_time_buffer = 0
-
-                    # Kiểm tra lại ngay sau khi cộng: nếu vừa chạm mốc hạn mức thì khóa ngay
-                    if used_seconds >= daily_limit_sec:
-                        print(f"[Enforcer] 🔒 VỪA HẾT HẠN MỨC NGÀY ({used_seconds}/{daily_limit_sec}s) -> KHÓA MÁY!")
-                        self.lock_workstation(reason="Hết hạn mức ngày")
 
     def run_loop(self, poll_interval: float = 2.0):
         """Vòng lặp chính của Enforcer."""

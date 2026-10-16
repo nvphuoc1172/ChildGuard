@@ -582,6 +582,28 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
 
 ---
 
+#### 10.2.8. Cảnh báo trước 10, 5, 1 phút & Khoảng ân hạn 60 giây để trẻ lưu bài (Grace Period & Notifications)
+- **Hướng phát triển & Mục tiêu**:
+  - Khi gần hết thời gian sử dụng được quy định:
+    - Theo hạn mức ngày (Daily Quota, ví dụ: 120 phút).
+    - Hoặc theo khung giờ sử dụng máy tính (Schedule: Ma trận lịch tuần 7x48 hoặc khung giờ `start_time` - `end_time`).
+  - Hệ thống tự động tính toán thời gian hiệu dụng còn lại và phát **Cảnh báo trước 10 phút, 5 phút và 1 phút**.
+  - **Khoảng ân hạn 60 giây (60-Second Grace Period)**:
+    - Khi chạm mốc hết giờ, hệ thống **không khóa máy đột ngột**, mà kích hoạt khoảng ân hạn 60 giây để trẻ kịp thời lưu bài làm, tài liệu học tập, hoặc bấm Ctrl+S.
+    - Trong 60 giây ân hạn, hiển thị đồng hồ đếm ngược và thông báo khẩn cấp trên màn hình.
+    - Sau khi hết 60 giây ân hạn, máy tính mới thực hiện khóa màn hình (`LockWorkStation`).
+  - **Cơ chế hiển thị thông báo trên Windows (để có thể quan sát được)**:
+    - *Windows MessageBox*: Sử dụng API `MessageBoxW` với cờ `MB_SERVICE_NOTIFICATION | MB_TOPMOST | MB_SETFOREGROUND` chạy trong luồng riêng, đảm bảo thông báo bật lên trên mọi cửa sổ kể cả khi chạy từ Windows Service.
+    - *System Tray & Floating Banner (`tray_app.py`)*:
+      - Khi có thông báo mới, gọi `pystray.Icon.notify()` hiển thị Windows Toast Balloon.
+      - Tạo cửa sổ nổi (floating top-most banner) đếm ngược trực tiếp trên màn hình với màu sắc phân cấp: Vàng cam (Cảnh báo 10p, 5p), Cam đậm (Khẩn cấp 1p), Đỏ đậm kèm đếm ngược từng giây (Ân hạn 60s).
+    - *Kênh IPC & Lịch sử*: Endpoint `/status` và `/notifications` cung cấp thông tin `active_notification`, `in_grace_period`, `grace_seconds_left` và danh sách lịch sử phục vụ giám sát và kiểm thử.
+    - *Event Queue*: Mọi cảnh báo và ân hạn đều được ghi vào hàng đợi sự kiện SQLite (`event_type="time_warning"`) và đồng bộ lên Server.
+- **Quy tắc chuyển đổi trạng thái**:
+  - Nếu phụ huynh duyệt cấp thêm giờ (`grant_extra_minutes`), trạng thái ân hạn được giải phóng ngay lập tức, các cờ cảnh báo được xóa để chuẩn bị cho chu kỳ tiếp theo mà không làm gián đoạn trải nghiệm của trẻ.
+
+---
+
 
 
 ## 11. Giả định đã chọn (nêu rõ để bạn duyệt trước khi code)
