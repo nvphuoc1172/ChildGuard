@@ -127,13 +127,33 @@ class TrayApp:
                 else:
                     schedule_text = f"📅 Khung giờ cho phép: {sch.get('start_time', '07:00')} đến {sch.get('end_time', '21:30')}\n"
 
+                if isinstance(ar, list):
+                    app_items = ar
+                    app_label = "🚫 Ứng dụng bị cấm (Blacklist):"
+                elif isinstance(ar, dict) and ar.get("mode") == "whitelist":
+                    app_items = ar.get("whitelist", [])
+                    app_label = "✅ Chỉ cho phép (Whitelist):"
+                elif isinstance(ar, dict):
+                    app_items = ar.get("blacklist", [])
+                    app_label = "🚫 Ứng dụng bị cấm (Blacklist):"
+                else:
+                    app_items = []
+                    app_label = "🚫 Ứng dụng bị cấm (Blacklist):"
+
+                app_display_list = []
+                for it in app_items:
+                    if isinstance(it, dict):
+                        app_display_list.append(it.get("name") or it.get("sha256") or str(it))
+                    else:
+                        app_display_list.append(str(it))
+
                 info_var.set(
                     f"⏱️ Hạn mức mỗi ngày: {d_quota} phút\n"
                     f"⏳ Đã sử dụng hôm nay: {u_min} phút\n"
                     f"🟢 Thời gian còn lại: {r_min} phút{lock_tag}\n\n"
                     f"{schedule_text}\n"
-                    f"🚫 Ứng dụng bị hạn chế:\n"
-                    f"  {', '.join(ar.get('blacklist', [])) or 'Không có'}\n\n"
+                    f"{app_label}\n"
+                    f"  {', '.join(app_display_list) or 'Không có'}\n\n"
                     f"🌐 Website bị hạn chế:\n"
                     f"  {', '.join(dr.get('blacklist', [])) or 'Không có'}\n"
                 )

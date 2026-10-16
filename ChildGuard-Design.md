@@ -501,6 +501,18 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
 
 ---
 
+   5. **Kiểm soát Ứng dụng theo Danh sách Cho phép/Chặn & Đối chiếu SHA-256 (Anti-cheat & Identity Resolution)**:
+      - *Hỗ trợ 2 chế độ*: Danh sách đen (`mode: "blacklist"` — chặn các ứng dụng cấm) và Danh sách trắng (`mode: "whitelist"` — chỉ cho phép các ứng dụng được duyệt, bảo vệ an toàn các tiến trình cốt lõi của hệ điều hành).
+      - *Cú pháp quy tắc linh hoạt*: Hỗ trợ `ten_tien_trinh.exe` (theo tên), `ten_tien_trinh.exe:ma_sha256` (đối chiếu cả tên và mã băm SHA-256), hoặc `ma_sha256` (chỉ định mã hash).
+      - *Bộ đệm hiệu năng cao*: `get_file_sha256` lưu đệm theo bộ ba `(path, mtime, size)` giúp tránh đọc đĩa I/O lặp lại trong vòng lặp 2 giây.
+      - *Nhận diện đúng bản chất khi đổi tên tệp (Anti-cheat)*:
+        - Nếu trẻ đổi tên `notepad.exe` thành `game.exe`, Agent băm mã SHA-256 của tệp thực thi, đối chiếu với mã chuẩn của `notepad.exe` và nhận diện đúng ứng dụng là Notepad $\rightarrow$ **KHÔNG bị chặn oan** dù tên tiến trình là `game.exe`.
+        - Ngược lại, nếu trẻ đổi tên `game.exe` thành `notepad.exe`, mã hash không trùng khớp với Notepad (hoặc trùng với hash game cấm) $\rightarrow$ Agent nhận diện ứng dụng giả mạo và **tiến hành đóng ngay lập tức**.
+      - *Bảo vệ tiến trình hệ thống*: Luôn cho phép các tiến trình thiết yếu của Windows (`explorer.exe`, `svchost.exe`, `csrss.exe`, `python.exe`,...) không bao giờ bị tắt nhầm.
+      - *Giao diện Dashboard*: Cho phép phụ huynh chọn chế độ Blacklist/Whitelist và nhập quy tắc trực tiếp từ giao diện web.
+
+---
+
 #### 10.2.5. Giao diện Khay Hệ thống & Minh bạch cho Trẻ (System Tray UI & Transparency Window)
 - **Hướng phát triển**:
   - Module `agent/tray/tray_app.py` chạy trong phiên người dùng:

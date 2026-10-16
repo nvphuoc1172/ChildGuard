@@ -146,3 +146,60 @@ def verify_parent_session(session_token: str) -> str | None:
         return None
 
 
+def _extract_base_filename(p: str) -> str:
+    """Trích xuất tên file thực thi hỗ trợ cả đường dẫn Windows (\\) và Unix (/)."""
+    return p.strip().replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+
+def parse_app_rule_entry(entry: str | dict) -> dict:
+    """Chuẩn hóa mục quy tắc ứng dụng hỗ trợ đối chiếu SHA-256.
+
+    Hỗ trợ:
+      - "game.exe"
+      - "game.exe:a3c5...64hex..."
+      - "C:\\Path\\game.exe:a3c5..."
+      - "game.exe a3c5..."
+      - "a3c5...64hex..." (chỉ có sha256)
+      - {"name": "game.exe", "sha256": "a3c5..."}
+    Trả về dict: {"name": str | None, "sha256": str | None}
+    """
+    from pathlib import Path
+
+    if isinstance(entry, dict):
+        name = entry.get("name") or entry.get("app") or entry.get("process")
+        h = entry.get("sha256") or entry.get("hash")
+        name_clean = _extract_base_filename(str(name)) if name else None
+        h_clean = str(h).strip().lower() if h else None
+        return {"name": name_clean, "sha256": h_clean}
+
+    entry_str = str(entry).strip()
+    if not entry_str:
+        return {"name": None, "sha256": None}
+
+    # Format name:hash (dùng rsplit để không bị nhầm ký tự ổ đĩa Windows C:\...)
+    if ":" in entry_str:
+        p0, p1 = entry_str.rsplit(":", 1)
+        p0, p1 = p0.strip(), p1.strip()
+        if len(p1) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p1):
+            return {"name": _extract_base_filename(p0), "sha256": p1.lower()}
+        if len(p0) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p0):
+            return {"name": _extract_base_filename(p1), "sha256": p0.lower()}
+
+    # Format name hash (cách nhau bởi khoảng trắng)
+    parts = entry_str.split()
+    if len(parts) == 2:
+        p0, p1 = parts[0].lower(), parts[1].lower()
+        if len(p1) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p1):
+            return {"name": _extract_base_filename(p0), "sha256": p1}
+        elif len(p0) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p0):
+            return {"name": _extract_base_filename(p1), "sha256": p0}
+
+    # Nếu chỉ có mã SHA-256 (64 ký tự hex)
+    if len(entry_str) == 64 and all(c in "0123456789abcdefABCDEF" for c in entry_str):
+        return {"name": None, "sha256": entry_str.lower()}
+
+    # Chỉ có tên file
+    return {"name": _extract_base_filename(entry_str), "sha256": None}
+
+
+

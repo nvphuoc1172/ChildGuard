@@ -84,11 +84,35 @@
 
     <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">
 
-    <h3 style="margin-bottom: 16px; font-size: 16px; color: var(--text-main);">2. Kiểm soát Ứng dụng (App Controller)</h3>
+    <h3 style="margin-bottom: 16px; font-size: 16px; color: var(--text-main);">2. Kiểm soát Ứng dụng & Đối chiếu SHA-256 (App Control)</h3>
+    <div class="form-group" style="margin-bottom: 16px;">
+      <label class="form-label" style="font-weight: 600;">Chế độ kiểm soát ứng dụng:</label>
+      <div style="display: flex; flex-wrap: wrap; gap: 24px; margin-top: 6px;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-main);">
+          <input type="radio" name="app_mode" value="blacklist" {% if app_mode != 'whitelist' %}checked{% endif %}>
+          <span><strong>Danh sách đen (Blacklist)</strong>: Cho phép tất cả, chỉ chặn các ứng dụng trong danh sách</span>
+        </label>
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-main);">
+          <input type="radio" name="app_mode" value="whitelist" {% if app_mode == 'whitelist' %}checked{% endif %}>
+          <span><strong>Danh sách trắng (Whitelist)</strong>: Chặn tất cả, chỉ cho phép các ứng dụng trong danh sách</span>
+        </label>
+      </div>
+    </div>
+
     <div class="form-group">
-      <label class="form-label">Danh sách tên tiến trình ứng dụng bị cấm (Blacklist)</label>
-      <textarea name="blocked_apps" class="form-textarea" rows="4" placeholder="vd: roblox.exe&#10;game.exe&#10;discord.exe">{{ blocked_apps_text }}</textarea>
-      <div class="form-help">Mỗi tên file tiến trình (.exe) trên một dòng. Khi phát hiện trẻ mở ứng dụng này, Agent sẽ đóng ngay trong 2-3s và ghi nhận cảnh báo.</div>
+      <label class="form-label">Danh sách quy tắc ứng dụng (Tên tiến trình và/hoặc Mã băm SHA-256)</label>
+      <textarea name="blocked_apps" class="form-textarea" rows="5" placeholder="vd:&#10;game.exe&#10;game.exe:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855&#10;notepad.exe:b45c20...&#10;roblox.exe">{{ blocked_apps_text }}</textarea>
+      <div class="form-help" style="margin-top: 6px; line-height: 1.5;">
+        <div>Mỗi ứng dụng trên một dòng. Hỗ trợ các định dạng:</div>
+        <ul style="margin: 4px 0 6px 20px; padding: 0;">
+          <li><code>ten_tien_trinh.exe</code> — Kiểm soát theo tên tiến trình (vd: <code>game.exe</code>).</li>
+          <li><code>ten_tien_trinh.exe:ma_sha256</code> — Đối chiếu chính xác cả tên tiến trình kèm mã băm SHA-256 của tệp thực thi.</li>
+          <li><code>ma_sha256</code> — Kiểm soát tuyệt đối theo mã băm SHA-256 của tệp thực thi bất kể tên file là gì.</li>
+        </ul>
+        <div style="color: var(--primary); font-size: 12px; margin-top: 4px;">
+          🛡️ <strong>Chống gian lận đổi tên tệp (Anti-cheat):</strong> Agent tự động băm SHA-256 tệp thực thi của tiến trình đang chạy. Nếu trẻ đổi tên <code>notepad.exe</code> thành <code>game.exe</code>, hệ thống vẫn nhận diện đúng mã băm của Notepad và không bị chặn nhầm; ngược lại đổi tên game bị cấm thành Notepad vẫn bị nhận diện và đóng ngay lập tức.
+        </div>
+      </div>
     </div>
 
     <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">

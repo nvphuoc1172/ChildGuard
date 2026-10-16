@@ -736,11 +736,32 @@ def policy_page(
         schedule["matrix"] = security.generate_matrix_from_times(
             schedule.get("start_time", "00:00"), schedule.get("end_time", "23:30")
         )
-    app_rules = json.loads(latest_policy.app_rules_json) if latest_policy else {"blacklist": []}
-    domain_rules = json.loads(latest_policy.domain_rules_json) if latest_policy else {"blacklist": []}
+    app_rules = json.loads(latest_policy.app_rules_json) if latest_policy else {"mode": "blacklist", "blacklist": []}
+    if isinstance(app_rules, list):
+        app_rules = {"mode": "blacklist", "blacklist": app_rules, "whitelist": []}
+    app_mode = app_rules.get("mode", "blacklist")
+    if app_mode == "whitelist":
+        raw_apps = app_rules.get("whitelist", [])
+    else:
+        raw_apps = app_rules.get("blacklist", [])
 
-    blocked_apps_list = app_rules.get("blacklist", [])
-    blocked_domains_list = domain_rules.get("blacklist", [])
+    lines = []
+    for item in raw_apps:
+        if isinstance(item, dict):
+            n = item.get("name", "")
+            h = item.get("sha256", "")
+            if n and h:
+                lines.append(f"{n}:{h}")
+            elif n:
+                lines.append(n)
+            elif h:
+                lines.append(h)
+        else:
+            lines.append(str(item))
+    blocked_apps_text = "\n".join(lines)
+
+    domain_rules = json.loads(latest_policy.domain_rules_json) if latest_policy else {"blacklist": []}
+    blocked_domains_list = domain_rules.get("blacklist", []) if isinstance(domain_rules, dict) else (domain_rules if isinstance(domain_rules, list) else [])
 
     return templates.TemplateResponse(
         request=request,
@@ -754,7 +775,8 @@ def policy_page(
             "quota": quota,
             "schedule": schedule,
             "schedule_matrix_json": json.dumps(schedule["matrix"]),
-            "blocked_apps_text": "\n".join(blocked_apps_list),
+            "app_mode": app_mode,
+            "blocked_apps_text": blocked_apps_text,
             "blocked_domains_text": "\n".join(blocked_domains_list),
             "success_msg": None,
         },
@@ -769,6 +791,7 @@ def save_policy_page(
     start_time: str = Form("07:00"),
     end_time: str = Form("21:30"),
     schedule_matrix: str = Form(""),
+    app_mode: str = Form("blacklist"),
     blocked_apps: str = Form(""),
     blocked_domains: str = Form(""),
     db: Session = Depends(get_db),
@@ -781,7 +804,25 @@ def save_policy_page(
     if not child:
         raise HTTPException(status_code=404, detail="child_not_found")
 
-    app_list = [line.strip().lower() for line in blocked_apps.splitlines() if line.strip()]
+    app_mode_clean = app_mode.strip().lower() if app_mode else "blacklist"
+    if app_mode_clean not in ("blacklist", "whitelist"):
+        app_mode_clean = "blacklist"
+
+    app_list = []
+    for line in blocked_apps.splitlines():
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+        parsed = security.parse_app_rule_entry(line_clean)
+        if parsed.get("name") and parsed.get("sha256"):
+            app_list.append(f"{parsed['name']}:{parsed['sha256']}")
+        elif parsed.get("name"):
+            app_list.append(parsed["name"])
+        elif parsed.get("sha256"):
+            app_list.append(parsed["sha256"])
+        else:
+            app_list.append(line_clean.lower())
+
     domain_list = []
     for line in blocked_domains.splitlines():
         d = line.strip().lower()
@@ -822,12 +863,17 @@ def save_policy_page(
     new_version = (latest.version + 1) if latest else 1
     now = datetime.utcnow()
 
+    if app_mode_clean == "whitelist":
+        app_rules_data = {"mode": "whitelist", "whitelist": app_list, "blacklist": []}
+    else:
+        app_rules_data = {"mode": "blacklist", "blacklist": app_list, "whitelist": []}
+
     new_policy = models.Policy(
         child_id=child_id,
         version=new_version,
         quota_json=json.dumps({"daily_minutes": daily_minutes}),
         schedule_json=json.dumps(schedule_data),
-        app_rules_json=json.dumps({"mode": "blacklist", "blacklist": app_list}),
+        app_rules_json=json.dumps(app_rules_data),
         domain_rules_json=json.dumps({"mode": "blacklist", "blacklist": domain_list}),
         created_at=now,
     )
@@ -838,7 +884,13 @@ def save_policy_page(
         actor_type="parent",
         actor_id=parent.id,
         action="policy_updated",
-        detail_json=json.dumps({"child_id": child_id, "version": new_version, "daily_minutes": daily_minutes}),
+        detail_json=json.dumps({
+            "child_id": child_id,
+            "version": new_version,
+            "daily_minutes": daily_minutes,
+            "app_mode": app_mode_clean,
+            "app_count": len(app_list),
+        }),
         created_at=now,
     )
     db.add(audit)
@@ -857,6 +909,7 @@ def save_policy_page(
             "quota": {"daily_minutes": daily_minutes},
             "schedule": schedule_data,
             "schedule_matrix_json": json.dumps(matrix),
+            "app_mode": app_mode_clean,
             "blocked_apps_text": "\n".join(app_list),
             "blocked_domains_text": "\n".join(domain_list),
             "success_msg": f"Đã lưu chính sách phiên bản v{new_version} thành công! Máy trẻ em sẽ tự cập nhật khi nhịp tim hoặc nhận lệnh.",
