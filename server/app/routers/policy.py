@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.database import get_db
+from app.policy_rules import normalize_app_rules
 
 router = APIRouter(tags=["policy"])
 
@@ -39,7 +40,7 @@ def update_policy(
         version=new_version,
         quota_json=json.dumps(payload.quota),
         schedule_json=json.dumps(payload.schedule),
-        app_rules_json=json.dumps(payload.app_rules),
+        app_rules_json=json.dumps(normalize_app_rules(payload.app_rules)),
         domain_rules_json=json.dumps(payload.domain_rules),
         created_at=now,
     )
@@ -66,7 +67,7 @@ def update_policy(
         version=new_policy.version,
         quota=payload.quota,
         schedule=payload.schedule,
-        app_rules=payload.app_rules,
+        app_rules=normalize_app_rules(payload.app_rules),
         domain_rules=payload.domain_rules,
     )
 
@@ -87,6 +88,6 @@ def get_child_policy(child_id: str, db: Session = Depends(get_db)):
         version=latest.version,
         quota=json.loads(latest.quota_json),
         schedule=json.loads(latest.schedule_json),
-        app_rules=json.loads(latest.app_rules_json),
+        app_rules=normalize_app_rules(json.loads(latest.app_rules_json)),
         domain_rules=json.loads(latest.domain_rules_json),
     )

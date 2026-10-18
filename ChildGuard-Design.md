@@ -58,7 +58,7 @@ flowchart LR
 | **OGK-Agent — Service**           | Áp chính sách, đếm thời gian sử dụng, chặn tiến trình/ứng dụng, lọc DNS, đệm sự kiện khi mất mạng  | Python 3.11+,`pywin32` (`win32serviceutil.ServiceFramework`), `psutil` để liệt kê/kill tiến trình; đăng ký Service Recovery Options (SCM) để tự khởi động lại sau crash                           |
 | **OGK-Agent — Tray UI**           | Giao diện cho trẻ: đồng hồ đếm ngược, lý do bị chặn, nút xin thêm giờ                                   | Chạy trong phiên đăng nhập user (không phải SYSTEM); giao tiếp Service qua**named pipe** (ưu tiên) hoặc HTTP `127.0.0.1:<port>` kèm token cục bộ ngẫu nhiên sinh mỗi lần Service khởi động |
 | **OGK-Server**                     | Xác thực phụ huynh, quản lý thiết bị/trẻ, phát hành policy, nhận sự kiện, tổng hợp báo cáo, audit log | FastAPI + Uvicorn (ASGI), SQLAlchemy ORM, SQLite chế độ WAL, TLS đầu cuối, rate-limit theo IP/device_id                                                                                                           |
-| **Dashboard phụ huynh**           | Cấu hình quota/lịch tuần/whitelist-blacklist, duyệt yêu cầu "xin thêm giờ", xem báo cáo                     | Jinja2 + HTMX, responsive (dùng được trên trình duyệt điện thoại)                                                                                                                                             |
+| **Dashboard phụ huynh**           | Cấu hình quota/lịch tuần/danh sách ứng dụng bị chặn, duyệt yêu cầu "xin thêm giờ", xem báo cáo              | Jinja2 + HTMX, responsive (dùng được trên trình duyệt điện thoại)                                                                                                                                             |
 | **Kho dữ liệu cục bộ (Agent)** | Bản sao chính sách gần nhất + hàng đợi sự kiện chưa gửi                                                    | SQLite tại`%ProgramData%\ChildGuard\agent.db`, ACL chỉ `SYSTEM` và `Administrators` được ghi (dùng `icacls` khi cài đặt)                                                                              |
 
 ### 3.1. Sơ đồ tiến trình nội bộ Agent
@@ -247,7 +247,7 @@ http://<SERVER_IP>:8443/dashboard
 | Giai đoạn                                                                  | Điều kiện                                                     | Hành vi                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ---------------------------------------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Giai đoạn 1 — Enforce cứng**                                     | Mất kết nối server từ 0 đến N₁ ngày (đề xuất N₁ = 3) | Tiếp tục áp**nguyên vẹn** policy đã cache: đúng quota, đúng lịch, đúng app/domain rules. Tray UI hiển thị rõ "Không kết nối được máy chủ — vẫn đang dùng chính sách đã lưu từ [ngày]".                                                                                                                                                                                     |
-| **Giai đoạn 2 — Chế độ an toàn suy giảm (degraded safe-mode)** | Mất kết nối > N₁ ngày, tới N₂ ngày (đề xuất N₂ = 14) | Chuyển sang**policy an toàn mặc định** cứng trong agent (không phải mở toàn bộ): chỉ cho phép danh sách ứng dụng giáo dục/hệ thống tối thiểu đã whitelist sẵn (trình duyệt, ứng dụng văn phòng, không giới hạn giờ), chặn toàn bộ domain ngoài whitelist DNS an toàn (vd danh sách domain giáo dục cơ bản). Ghi log rõ ràng "degraded_mode_entered" để audit. |
+| **Giai đoạn 2 — Chế độ an toàn suy giảm (degraded safe-mode)** | Mất kết nối > N₁ ngày, tới N₂ ngày (đề xuất N₂ = 14) | Tiếp tục dùng policy cache gần nhất và danh sách chặn an toàn tích hợp sẵn; không tự chuyển sang cơ chế cho phép theo danh sách. Ghi log rõ ràng `degraded_mode_entered` để audit. |
 | **Sau N₂ ngày**                                                      | —                                                               | Vẫn giữ nguyên trạng thái degraded safe-mode,**không** bao giờ tự mở khóa hoàn toàn (fail-open) chỉ vì thời gian trôi qua. Gỡ bỏ hoàn toàn yêu cầu quyền Administrator tại máy (gỡ cài đặt) hoặc mã "unlock khẩn cấp" ký số cấp riêng cho phụ huynh lúc enrollment (lưu offline, không qua mạng).                                                                    |
 
 **Lý do bảo vệ lựa chọn này (không chọn fail-open):**
@@ -326,7 +326,8 @@ ChildGuard/
 │   ├── dns_proxy.py              ✅ DNS Proxy 127.0.0.1:53: lọc domain blacklist, trả 0.0.0.0,
 │   │                                  forward upstream 8.8.8.8, ghi log chặn web.
 │   ├── sync.py                   ✅ Sync Worker: WebSocket wss://.../ws/{device_id} lệnh khẩn <5s,
-│   │                                  Heartbeat 60s, đẩy batch events với idempotency key.
+│   │                                  Heartbeat 60s, đẩy batch events độc lập mỗi 5s với idempotency key.
+│   ├── logging_utils.py          ✅ Timestamp log, flush ngay và chống Quick Edit làm tạm dừng console.
 │   ├── ipc.py                    ✅ Local IPC Server (127.0.0.1:48123) kết nối Agent với Tray UI.
 │   ├── run_agent.py              ✅ Điểm khởi chạy toàn bộ dịch vụ Agent trên Windows.
 │   ├── agent_state/               ✅ (tự sinh) device_token.json, agent.db (.gitignore).
@@ -343,6 +344,7 @@ ChildGuard/
 │   │   │                              + static files, endpoint GET /ping.
 │   │   ├── database.py            ✅ Engine SQLAlchemy, bật WAL mode + foreign_keys, get_db().
 │   │   ├── domain_categories.py    ✅ Nạp bảng 200 website và phân loại domain cho báo cáo.
+│   │   ├── policy_rules.py          ✅ Chuẩn hóa quy tắc ứng dụng về danh sách chặn duy nhất.
 │   │   ├── models.py              ✅ 10 bảng đầy đủ theo Design: Parent, Child, Device,
 │   │   │                              EnrollmentCode, Token, Policy, Command, EventLog,
 │   │   │                              ChildRequest, AuditLog.
@@ -397,7 +399,7 @@ ChildGuard/
 │   │                                 batch upload và idempotency key deduplication.
 │   ├── test_policy.py            ✅ 2 test cập nhật policy tăng version và lấy policy.
 │   ├── test_requests.py          ✅ 2 test tạo và phê duyệt/từ chối yêu cầu của trẻ.
-│   ├── test_app_enforcer.py      ✅ 8 test kiểm soát ứng dụng blacklist/whitelist & SHA-256.
+│   ├── test_app_enforcer.py      ✅ Kiểm thử danh sách ứng dụng bị chặn & đối chiếu SHA-256.
 │   ├── test_hosts_blocker.py     ✅ 6 test DNS proxy & Windows hosts blocker.
 │   ├── test_weekly_schedule.py   ✅ 2 test ma trận lịch tuần 7x48.
 │   ├── test_screen_time_sync.py  ✅ 5 test đếm thời gian thực & đồng bộ UTC chống tua RTC.
@@ -600,15 +602,15 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
 
 ---
 
-   5. **Kiểm soát Ứng dụng theo Danh sách Cho phép/Chặn & Đối chiếu SHA-256 (Anti-cheat & Identity Resolution)**:
-      - *Hỗ trợ 2 chế độ*: Danh sách đen (`mode: "blacklist"` — chặn các ứng dụng cấm) và Danh sách trắng (`mode: "whitelist"` — chỉ cho phép các ứng dụng được duyệt, bảo vệ an toàn các tiến trình cốt lõi của hệ điều hành).
+   5. **Kiểm soát Ứng dụng theo Danh sách Chặn & Đối chiếu SHA-256 (Anti-cheat & Identity Resolution)**:
+      - *Một chế độ duy nhất*: Danh sách đen (`mode: "blacklist"`) cho phép mọi ứng dụng, chỉ chặn các ứng dụng do phụ huynh khai báo.
       - *Cú pháp quy tắc linh hoạt*: Hỗ trợ `ten_tien_trinh.exe` (theo tên), `ten_tien_trinh.exe:ma_sha256` (đối chiếu cả tên và mã băm SHA-256), hoặc `ma_sha256` (chỉ định mã hash).
       - *Bộ đệm hiệu năng cao*: `get_file_sha256` lưu đệm theo bộ ba `(path, mtime, size)` giúp tránh đọc đĩa I/O lặp lại trong vòng lặp 2 giây.
       - *Nhận diện đúng bản chất khi đổi tên tệp (Anti-cheat)*:
         - Nếu trẻ đổi tên `notepad.exe` thành `game.exe`, Agent băm mã SHA-256 của tệp thực thi, đối chiếu với mã chuẩn của `notepad.exe` và nhận diện đúng ứng dụng là Notepad $\rightarrow$ **KHÔNG bị chặn oan** dù tên tiến trình là `game.exe`.
         - Ngược lại, nếu trẻ đổi tên `game.exe` thành `notepad.exe`, mã hash không trùng khớp với Notepad (hoặc trùng với hash game cấm) $\rightarrow$ Agent nhận diện ứng dụng giả mạo và **tiến hành đóng ngay lập tức**.
       - *Bảo vệ tiến trình hệ thống*: Luôn cho phép các tiến trình thiết yếu của Windows (`explorer.exe`, `svchost.exe`, `csrss.exe`, `python.exe`,...) không bao giờ bị tắt nhầm.
-      - *Giao diện Dashboard*: Cho phép phụ huynh chọn chế độ Blacklist/Whitelist và nhập quy tắc trực tiếp từ giao diện web.
+      - *Giao diện Dashboard*: Chỉ hiển thị vùng nhập danh sách ứng dụng bị chặn, không có lựa chọn chế độ.
 
 ---
 
@@ -618,6 +620,7 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
     - Hiển thị biểu tượng khiên bảo vệ `🛡️` ở khay hệ thống qua thư viện `pystray`.
     - Menu xem thời gian còn lại.
     - Cửa sổ minh bạch hiển thị chi tiết chính sách cha mẹ đã đặt (hạn mức, giờ giấc, app cấm, web cấm).
+    - Cửa sổ “Góc của bé” hiển thị trực tiếp tên các ứng dụng đang bị hạn chế, lấy từ policy hiệu lực qua `GET /status`.
     - Hộp thoại xin thêm giờ (+15, +30, +60 phút) gửi qua IPC lên Server để phụ huynh duyệt.
 - **Các lỗi đã gặp**:
   - **Menu và Tooltip hiển thị tĩnh không đếm ngược**: Do `pystray` trên Windows không tự động vẽ lại nội dung MenuItem nếu không có lệnh cập nhật menu định kỳ.
@@ -640,6 +643,8 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
   - Khi chính sách thay đổi trên Server, Agent nhận được `policy_changed=True` và gọi `fetch_and_apply_policy()`, nhưng danh sách cấm mới không được chuyển tiếp sang DNS Proxy và Hosts Blocker, khiến việc chặn trang web mới chỉ có hiệu lực sau khi tắt và bật lại Agent.
 - **Cách sửa**:
   - Truyền tham chiếu `dns_proxy` vào khởi tạo của `SyncWorker`. Khi `fetch_and_apply_policy()` tải xong chính sách mới từ server, tự động kích hoạt `self.dns_proxy.sync_policy_rules(policy_data)` để cập nhật file hosts và bộ lọc DNS ngay lập tức mà không cần khởi động lại tiến trình.
+  - Tách việc gửi event khỏi heartbeat: một luồng riêng gọi `POST /events/batch` mỗi 5 giây. Lỗi heartbeat, tải policy hoặc WebSocket vì vậy không còn làm hàng đợi nhật ký bị kẹt.
+  - Access Token chỉ được làm mới khi thực sự gần hết hạn hoặc Server trả về `401/403`; không làm mới vô điều kiện khi Agent vừa chạy hay WebSocket vừa ngắt.
 
 ---
 
@@ -710,7 +715,8 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
 - Báo cáo hiển thị đủ sáu nhóm website, danh sách domain trẻ đã truy vấn và tổng số phút hoạt động của từng nhóm trong từng ngày của bảy ngày gần nhất.
 - `domain_query` hiện không có sự kiện đóng tab. Vì vậy thời gian website được ghi rõ là **ước tính**: mỗi `(domain, phút)` có ít nhất một truy vấn DNS được tính một phút và các truy vấn lặp trong cùng phút được khử trùng lặp. Nếu Event Item tương lai cung cấp `duration_sec > 0`, báo cáo ưu tiên thời lượng đó.
 - Timestamp luôn được lưu dưới dạng UTC. Khi tổng hợp ngày, giờ và hiển thị trên Dashboard, Server chuyển sang `Asia/Ho_Chi_Minh` bằng `zoneinfo`; không cộng cứng 7 giờ. Do đó sự kiện `09:02:00Z` hiển thị `16:02:00` GMT+7 và được xếp vào đúng ngày địa phương.
-- Nhật ký gần nhất được truy vấn riêng bằng `ORDER BY created_at DESC, id DESC LIMIT 20`, không bị giới hạn bởi cửa sổ biểu đồ bảy ngày. Partial HTMX `/dashboard/reports/recent-events` tự tải lại mỗi 5 giây để nhận batch mới mà không làm mới toàn trang.
+- Nhật ký gần nhất được truy vấn riêng bằng `ORDER BY created_at DESC, id DESC LIMIT 20`, không bị giới hạn bởi cửa sổ biểu đồ bảy ngày. Partial HTMX `/dashboard/reports/recent-events` tự tải lại mỗi 5 giây, trả header `Cache-Control: no-store` để nhận batch mới mà không làm mới toàn trang.
+- Console của `run_agent.py` được cấu hình tại `agent/logging_utils.py`: mọi dòng có timestamp theo múi giờ máy, `stdout/stderr` dùng chế độ line-buffered/write-through và `print(..., flush=True)`. Trên Windows, chế độ Quick Edit bị tắt để thao tác chọn văn bản không vô tình đóng băng tiến trình cho tới khi nhấn Enter/Esc.
 
 ---
 

@@ -82,15 +82,6 @@ def test_essential_system_processes_never_blocked():
         )
         assert is_blocked is False
 
-        # Trong whitelist (dù không có tên trong whitelist)
-        is_blocked, reason, _ = check_process_rule(
-            proc_name=proc,
-            proc_sha256=None,
-            app_rules={"mode": "whitelist", "whitelist": ["notepad.exe"]},
-        )
-        assert is_blocked is False
-
-
 def test_renamed_notepad_to_game_not_blocked_in_blacklist():
     """Yêu cầu cốt lõi: Đổi tên notepad.exe thành game.exe vẫn bị nhận diện đúng là Notepad và không bị chặn oan."""
     notepad_hash = "aaaa1111222233334444555566667777888899990000aaaabbbbccccddddeeee"
@@ -140,35 +131,11 @@ def test_renamed_game_to_notepad_is_blocked_in_blacklist():
     assert identified == "game.exe"
 
 
-def test_whitelist_mode_with_identity_resolution():
-    """Kiểm tra chế độ Whitelist (Danh sách trắng)."""
-    notepad_hash = "aaaa1111222233334444555566667777888899990000aaaabbbbccccddddeeee"
-    known_hashes = {"notepad.exe": notepad_hash}
-
-    # Whitelist chỉ cho phép notepad.exe
-    app_rules = {
-        "mode": "whitelist",
-        "whitelist": ["notepad.exe"],
-    }
-
-    # 1. Ứng dụng notepad.exe chuẩn -> Được phép
-    is_blocked, _, identified = check_process_rule("notepad.exe", notepad_hash, app_rules, known_hashes)
+def test_legacy_whitelist_fields_are_ignored():
+    """Policy cũ dạng whitelist không được tiếp tục chặn ứng dụng."""
+    legacy_rules = {"mode": "whitelist", "whitelist": ["notepad.exe"], "blacklist": []}
+    is_blocked, _, _ = check_process_rule("roblox.exe", None, legacy_rules, {})
     assert is_blocked is False
-    assert identified == "notepad.exe"
-
-    # 2. notepad.exe đổi tên thành game.exe nhưng hash là của notepad.exe -> Được phép vì nhận diện đúng là notepad!
-    is_blocked, _, identified = check_process_rule("game.exe", notepad_hash, app_rules, known_hashes)
-    assert is_blocked is False
-    assert identified == "notepad.exe"
-
-    # 3. Game lạ đổi tên thành notepad.exe nhưng hash không phải notepad.exe -> Bị chặn vì giả mạo tên
-    fake_hash = "1111222233334444555566667777888899990000111122223333444455556666"
-    is_blocked, _, _ = check_process_rule("notepad.exe", fake_hash, app_rules, known_hashes)
-    assert is_blocked is True
-
-    # 4. Ứng dụng khác không có trong whitelist (ví dụ: roblox.exe) -> Bị chặn
-    is_blocked, _, _ = check_process_rule("roblox.exe", fake_hash, app_rules, known_hashes)
-    assert is_blocked is True
 
 
 def test_scan_and_enforce_processes_mocked(tmp_path):
@@ -226,8 +193,8 @@ def test_scan_and_enforce_processes_mocked(tmp_path):
             assert event_calls[-1].kwargs["subject"] == "notepad.exe"
 
 
-def test_dashboard_save_policy_with_app_mode(client, db_session):
-    """Kiểm tra lưu chính sách với app_mode (whitelist và blacklist) từ Dashboard."""
+def test_dashboard_always_saves_blacklist_policy(client, db_session):
+    """Dashboard chỉ lưu blacklist, kể cả client cũ còn gửi app_mode=whitelist."""
     parent = models.Parent(email="parent_app_mode@test.local", password_hash="dummy")
     db_session.add(parent)
     db_session.flush()
@@ -239,7 +206,7 @@ def test_dashboard_save_policy_with_app_mode(client, db_session):
     session_cookie = security.create_parent_session(parent.id)
     client.cookies.set("ogk_session", session_cookie)
 
-    # 1. Lưu chính sách Whitelist
+    # Client cũ cố gửi app_mode=whitelist; server vẫn chuẩn hóa thành blacklist.
     dummy_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     res1 = client.post(
         "/dashboard/policy/save",
@@ -257,9 +224,9 @@ def test_dashboard_save_policy_with_app_mode(client, db_session):
 
     pol1 = db_session.query(models.Policy).filter(models.Policy.child_id == child.id).order_by(models.Policy.version.desc()).first()
     app_rules1 = json.loads(pol1.app_rules_json)
-    assert app_rules1["mode"] == "whitelist"
-    assert f"notepad.exe:{dummy_hash}" in app_rules1["whitelist"]
-    assert "calc.exe" in app_rules1["whitelist"]
+    assert app_rules1["mode"] == "blacklist"
+    assert f"notepad.exe:{dummy_hash}" in app_rules1["blacklist"]
+    assert "calc.exe" in app_rules1["blacklist"]
 
     # 2. Cập nhật chính sách sang Blacklist
     res2 = client.post(

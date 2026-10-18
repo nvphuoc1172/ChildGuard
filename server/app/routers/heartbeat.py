@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.database import get_db
+from app.policy_rules import normalize_app_rules
 from app.deps import get_current_device
 
 router = APIRouter(tags=["heartbeat"])
@@ -93,6 +94,6 @@ def get_policy(
         version=latest_policy.version,
         quota=json.loads(latest_policy.quota_json),
         schedule=json.loads(latest_policy.schedule_json),
-        app_rules=json.loads(latest_policy.app_rules_json),
+        app_rules=normalize_app_rules(json.loads(latest_policy.app_rules_json)),
         domain_rules=json.loads(latest_policy.domain_rules_json),
     )

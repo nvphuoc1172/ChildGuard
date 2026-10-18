@@ -332,6 +332,7 @@ def test_reports_dashboard_shows_child_categories_and_live_recent_fragment(clien
 
     fragment = client.get(f"/dashboard/reports/recent-events?child_id={child.id}")
     assert fragment.status_code == 200
+    assert fragment.headers["cache-control"] == "no-store, no-cache, must-revalidate"
     assert "domain_query" in fragment.text
     assert "wikipedia.org" in fragment.text
     assert "GMT+7" in fragment.text

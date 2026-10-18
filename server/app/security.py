@@ -85,7 +85,7 @@ def validate_or_normalize_matrix(raw: any) -> list[list[int]] | None:
 
 def default_policy_payload() -> dict:
     """Chính sách mặc định khi một trẻ chưa từng có policy nào —
-    an toàn-trước (quota thấp, không whitelist ứng dụng/domain nào),
+    an toàn-trước (quota thấp, blacklist ứng dụng rỗng),
     phụ huynh chỉnh lại ngay trên dashboard sau khi ghép đôi."""
     blocked_file = Path(__file__).resolve().parent.parent / "data" / "default_blocked_domains.txt"
     try:
@@ -101,7 +101,7 @@ def default_policy_payload() -> dict:
     return {
         "quota_json": '{"daily_minutes": 120}',
         "schedule_json": "{}",
-        "app_rules_json": '{"mode": "allow_all"}',
+        "app_rules_json": '{"mode": "blacklist", "blacklist": []}',
         "domain_rules_json": json.dumps(
             {
                 "mode": "blacklist",

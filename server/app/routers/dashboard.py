@@ -24,6 +24,7 @@ from app import models, security
 from app.database import get_db
 from app.deps import get_optional_parent
 from app.domain_categories import CATEGORY_DEFINITIONS
+from app.policy_rules import normalize_app_rules
 from app.routers.commands import manager
 from app.routers.reports import (
     cleanup_old_logs,
@@ -767,14 +768,10 @@ def policy_page(
         schedule["matrix"] = security.generate_matrix_from_times(
             schedule.get("start_time", "00:00"), schedule.get("end_time", "23:30")
         )
-    app_rules = json.loads(latest_policy.app_rules_json) if latest_policy else {"mode": "blacklist", "blacklist": []}
-    if isinstance(app_rules, list):
-        app_rules = {"mode": "blacklist", "blacklist": app_rules, "whitelist": []}
-    app_mode = app_rules.get("mode", "blacklist")
-    if app_mode == "whitelist":
-        raw_apps = app_rules.get("whitelist", [])
-    else:
-        raw_apps = app_rules.get("blacklist", [])
+    app_rules = normalize_app_rules(
+        json.loads(latest_policy.app_rules_json) if latest_policy else {}
+    )
+    raw_apps = app_rules["blacklist"]
 
     lines = []
     for item in raw_apps:
@@ -807,7 +804,6 @@ def policy_page(
             "quota": quota,
             "schedule": schedule,
             "schedule_matrix_json": json.dumps(schedule["matrix"]),
-            "app_mode": app_mode,
             "blocked_apps_text": blocked_apps_text,
             "blocked_domains_text": "\n".join(blocked_domains_list),
             "safesearch_enabled": safesearch_enabled,
@@ -824,7 +820,6 @@ def save_policy_page(
     start_time: str = Form("07:00"),
     end_time: str = Form("21:30"),
     schedule_matrix: str = Form(""),
-    app_mode: str = Form("blacklist"),
     blocked_apps: str = Form(""),
     blocked_domains: str = Form(""),
     safesearch: str = Form("off"),
@@ -837,10 +832,6 @@ def save_policy_page(
     child = db.get(models.Child, child_id)
     if not child:
         raise HTTPException(status_code=404, detail="child_not_found")
-
-    app_mode_clean = app_mode.strip().lower() if app_mode else "blacklist"
-    if app_mode_clean not in ("blacklist", "whitelist"):
-        app_mode_clean = "blacklist"
 
     app_list = []
     for line in blocked_apps.splitlines():
@@ -897,10 +888,7 @@ def save_policy_page(
     new_version = (latest.version + 1) if latest else 1
     now = datetime.utcnow()
 
-    if app_mode_clean == "whitelist":
-        app_rules_data = {"mode": "whitelist", "whitelist": app_list, "blacklist": []}
-    else:
-        app_rules_data = {"mode": "blacklist", "blacklist": app_list, "whitelist": []}
+    app_rules_data = {"mode": "blacklist", "blacklist": app_list}
 
     safesearch_enabled = safesearch in ("on", "true", "1")
     domain_rules_data = {
@@ -929,7 +917,7 @@ def save_policy_page(
             "child_id": child_id,
             "version": new_version,
             "daily_minutes": daily_minutes,
-            "app_mode": app_mode_clean,
+            "app_rule_type": "blacklist",
             "app_count": len(app_list),
             "safesearch": safesearch_enabled,
         }),
@@ -951,7 +939,6 @@ def save_policy_page(
             "quota": {"daily_minutes": daily_minutes},
             "schedule": schedule_data,
             "schedule_matrix_json": json.dumps(matrix),
-            "app_mode": app_mode_clean,
             "blocked_apps_text": "\n".join(app_list),
             "blocked_domains_text": "\n".join(domain_list),
             "safesearch_enabled": safesearch_enabled,
@@ -1072,11 +1059,13 @@ def reports_recent_events(
     if child is None:
         raise HTTPException(status_code=404, detail="child_not_found")
     stats = get_child_stats_summary(child.id, db)
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request=request,
         name="partials/recent_events.html",
         context={"recent_events": stats["recent_events"], "report_timezone": stats["report_timezone"]},
     )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return response
 
 
 @router.get("/dashboard/reports/export-pdf")

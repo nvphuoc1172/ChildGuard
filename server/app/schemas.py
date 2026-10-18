@@ -145,7 +145,7 @@ class PolicyUpdateRequest(BaseModel):
     child_id: str
     quota: dict = Field(default_factory=lambda: {"daily_minutes": 120})
     schedule: dict = Field(default_factory=dict)
-    app_rules: dict = Field(default_factory=lambda: {"mode": "allow_all"})
+    app_rules: dict = Field(default_factory=lambda: {"mode": "blacklist", "blacklist": []})
     domain_rules: dict = Field(default_factory=lambda: {"mode": "allow_all"})
 
 
