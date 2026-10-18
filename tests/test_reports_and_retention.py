@@ -419,3 +419,70 @@ def test_child_today_screen_and_request_time(client, db_session):
     assert req.subject == "15"
     assert "Con đang làm dở bài vẽ" in req.reason
     assert req.status == "pending"
+
+
+def test_weekly_report_pdf_generation_and_export_endpoints(client, db_session):
+    """Kiểm tra xuất file PDF báo cáo tuần:
+    1. Hàm pure-Python generate_weekly_report_pdf sinh tệp PDF 1.4 hợp lệ.
+    2. Endpoint GET /reports/{child_id}/pdf trả về application/pdf và Content-Disposition attachment.
+    3. Endpoint GET /dashboard/reports/export-pdf trên Dashboard trả về application/pdf.
+    """
+    from app.routers.reports import generate_weekly_report_pdf
+
+    parent, child, device = _setup_child_and_device(db_session)
+
+    dummy_stats = {
+        "today_screen_time_minutes": 85.5,
+        "daily_quota": 120,
+        "daily_list": [
+            {"day": "12/10", "minutes": 45.0},
+            {"day": "13/10", "minutes": 60.0},
+            {"day": "14/10", "minutes": 90.0},
+            {"day": "15/10", "minutes": 130.0},
+            {"day": "16/10", "minutes": 85.0},
+            {"day": "17/10", "minutes": 110.0},
+            {"day": "18/10", "minutes": 85.5},
+        ],
+        "top_blocked_apps": [
+            {"name": "game.exe", "count": 14},
+            {"name": "roblox.exe", "count": 8},
+        ],
+        "top_blocked_webs": [
+            {"name": "facebook.com", "count": 22},
+            {"name": "tiktok.com", "count": 17},
+        ],
+    }
+
+    # 1. Kiểm tra cấu trúc binary của file PDF thuần Python
+    pdf_bytes = generate_weekly_report_pdf("Nguyen Minh An", dummy_stats)
+    assert isinstance(pdf_bytes, bytes)
+    assert pdf_bytes.startswith(b"%PDF-1.4")
+    assert b"%%EOF" in pdf_bytes
+    assert b"CHILDGUARD - BAO CAO HOAT DONG TUAN" in pdf_bytes
+    assert b"Nguyen Minh An" in pdf_bytes
+
+    # 2. Kiểm tra endpoint API GET /reports/{child_id}/pdf
+    resp1 = client.get(f"/reports/{child.id}/pdf")
+    assert resp1.status_code == 200
+    assert resp1.headers["content-type"] == "application/pdf"
+    assert "attachment" in resp1.headers["content-disposition"]
+    assert resp1.content.startswith(b"%PDF-1.4")
+
+    # Đăng nhập phụ huynh bằng session cookie cho Dashboard
+    from app import security
+    client.cookies["ogk_session"] = security.create_parent_session(parent.id)
+
+    # 3. Kiểm tra endpoint Dashboard GET /dashboard/reports/export-pdf
+    resp2 = client.get(f"/dashboard/reports/export-pdf?child_id={child.id}")
+    assert resp2.status_code == 200
+    assert resp2.headers["content-type"] == "application/pdf"
+    assert "attachment" in resp2.headers["content-disposition"]
+    assert resp2.content.startswith(b"%PDF-1.4")
+
+    # 4. Kiểm tra trang HTML reports có nút tải PDF và nút in
+    resp_html = client.get("/dashboard/reports")
+    assert resp_html.status_code == 200
+    assert "Xu\u1ea5t PDF B\u00e1o C\u00e1o Tu\u1ea7n" in resp_html.text
+    assert "/dashboard/reports/export-pdf" in resp_html.text
+    assert "window.print()" in resp_html.text
+

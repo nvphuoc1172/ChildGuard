@@ -3,6 +3,34 @@
 {% block title %}Báo cáo & Thống kê · ChildGuard{% endblock %}
 
 {% block content %}
+<style>
+@media print {
+  .sidebar, .navbar, .page-header select, .page-header label, .no-print, .alert, .btn, #purgeModal {
+    display: none !important;
+  }
+  body, .main-content, .content-area {
+    background: #ffffff !important;
+    color: #111827 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+  }
+  .card {
+    box-shadow: none !important;
+    border: 1px solid #e5e7eb !important;
+    break-inside: avoid;
+    margin-bottom: 16px !important;
+  }
+  .page-title {
+    font-size: 20px !important;
+    color: #111827 !important;
+  }
+  .page-title-sub {
+    color: #4b5563 !important;
+  }
+}
+</style>
+
 <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
   <div>
     <h1 class="page-title">Báo cáo & Thống kê hoạt động</h1>
@@ -11,7 +39,7 @@
 
   <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
     {% if children and children|length > 1 %}
-    <form method="get" action="/dashboard/reports" style="display: flex; align-items: center; gap: 6px;">
+    <form method="get" action="/dashboard/reports" class="no-print" style="display: flex; align-items: center; gap: 6px;">
       <label style="font-size: 13px; color: var(--text-muted);">Chọn bé:</label>
       <select name="child_id" onchange="this.form.submit()" style="padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: var(--bg-surface); color: var(--text-main); font-size: 13px;">
         {% for c in children %}
@@ -20,6 +48,14 @@
       </select>
     </form>
     {% endif %}
+
+    <a href="/dashboard/reports/export-pdf{% if selected_child %}?child_id={{ selected_child.id }}{% endif %}" class="btn btn-primary no-print" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600; text-decoration: none;">
+      📥 Xuất PDF Báo Cáo Tuần
+    </a>
+
+    <button type="button" onclick="window.print()" class="btn btn-outline no-print" style="display: inline-flex; align-items: center; gap: 6px;">
+      🖨️ In / Lưu PDF
+    </button>
   </div>
 </div>
 

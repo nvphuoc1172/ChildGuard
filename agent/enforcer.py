@@ -13,6 +13,8 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import os
+import re
+import shutil
 import sys
 import threading
 import time
@@ -51,27 +53,80 @@ ESSENTIAL_SYSTEM_PROCESSES = {
 }
 
 
+def _read_file_hash_windows(p_str: str, block_size: int = 65536) -> str | None:
+    """Đọc hash tệp trên Windows dùng Win32 CreateFileW với cờ chia sẻ đầy đủ (FILE_SHARE_READ|WRITE|DELETE).
+    
+    Hữu ích khi tệp thực thi đang chạy bị Windows OS hoặc trình bảo vệ khóa chia sẻ đọc thông thường.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import msvcrt
+        GENERIC_READ = 0x80000000
+        FILE_SHARE_READ = 0x00000001
+        FILE_SHARE_WRITE = 0x00000002
+        FILE_SHARE_DELETE = 0x00000004
+        OPEN_EXISTING = 3
+        FILE_ATTRIBUTE_NORMAL = 0x00000080
+        FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000
+
+        handle = ctypes.windll.kernel32.CreateFileW(
+            p_str,
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+            None,
+        )
+        if handle == -1 or handle == 0xFFFFFFFF:
+            return None
+        try:
+            fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+            with os.fdopen(fd, "rb", closefd=True) as f:
+                h = hashlib.sha256()
+                while chunk := f.read(block_size):
+                    h.update(chunk)
+                return h.hexdigest().lower()
+        except Exception:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return None
+    except Exception:
+        return None
+
+
 def get_file_sha256(file_path: str | Path, block_size: int = 65536) -> str | None:
     """Tính mã SHA-256 của tệp thực thi với bộ đệm bộ nhớ theo (mtime, size)."""
     try:
-        p = Path(file_path)
+        clean_path = str(file_path).strip().strip('"').strip("'")
+        if not clean_path:
+            return None
+        p = Path(clean_path)
         if not p.is_file():
             return None
         stat = p.stat()
         mtime = stat.st_mtime
         size = stat.st_size
-        p_str = str(p.resolve())
+        p_str = os.path.abspath(clean_path)
 
         cached = _FILE_HASH_CACHE.get(p_str)
         if cached and cached[0] == mtime and cached[1] == size:
             return cached[2]
 
-        h = hashlib.sha256()
-        with open(p, "rb") as f:
-            while chunk := f.read(block_size):
-                h.update(chunk)
-        digest = h.hexdigest().lower()
-        _FILE_HASH_CACHE[p_str] = (mtime, size, digest)
+        digest = None
+        try:
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                while chunk := f.read(block_size):
+                    h.update(chunk)
+            digest = h.hexdigest().lower()
+        except (PermissionError, OSError):
+            # Trên Windows: tệp đang chạy có thể bị khóa quyền đọc chuẩn -> Thử qua CreateFileW với FILE_SHARE_*
+            if sys.platform == "win32":
+                digest = _read_file_hash_windows(p_str, block_size=block_size)
+
+        if digest:
+            _FILE_HASH_CACHE[p_str] = (mtime, size, digest)
         return digest
     except Exception:
         return None
@@ -83,15 +138,12 @@ def _extract_base_filename(p: str) -> str:
 
 
 def parse_app_rule_entry(entry: str | dict) -> dict:
-    """Chuẩn hóa mục quy tắc ứng dụng.
-
-    Hỗ trợ:
-      - "game.exe"
-      - "game.exe:a3c5...64hex..."
-      - "C:\\Path\\game.exe:a3c5..."
-      - "game.exe a3c5..."
-      - "a3c5...64hex..." (chỉ có sha256)
-      - {"name": "game.exe", "sha256": "a3c5..."}
+    """Chuẩn hóa mục quy tắc ứng dụng hỗ trợ tối đa các định dạng:
+      - Tên tiến trình: "game.exe", "C:\\Games\\game.exe"
+      - Tên tiến trình kèm hash: "game.exe:a3c5...", "game.exe:sha256:a3c5...", "game.exe a3c5..."
+      - Chỉ nhập SHA-256: "a3c5...64hex...", "sha256:a3c5...", "sha-256:a3c5..."
+      - Đầu ra Certutil có khoảng trắng: "a3 c5 14 ... 64hex..."
+      - Dạng dict: {"name": "game.exe", "sha256": "a3c5..."}
     Trả về dict: {"name": str | None, "sha256": str | None}
     """
     if isinstance(entry, dict):
@@ -99,36 +151,45 @@ def parse_app_rule_entry(entry: str | dict) -> dict:
         h = entry.get("sha256") or entry.get("hash")
         name_clean = _extract_base_filename(str(name)) if name else None
         h_clean = str(h).strip().lower() if h else None
-        return {"name": name_clean, "sha256": h_clean}
+        if h_clean:
+            h_clean = re.sub(r"[^0-9a-fA-F]", "", h_clean).lower()
+        return {"name": name_clean, "sha256": h_clean or None}
 
     entry_str = str(entry).strip()
     if not entry_str:
         return {"name": None, "sha256": None}
 
-    # Format name:hash (dùng rsplit để không bị nhầm ký tự ổ đĩa Windows C:\...)
-    if ":" in entry_str:
-        p0, p1 = entry_str.rsplit(":", 1)
-        p0, p1 = p0.strip(), p1.strip()
-        if len(p1) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p1):
-            return {"name": _extract_base_filename(p0), "sha256": p1.lower()}
-        if len(p0) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p0):
-            return {"name": _extract_base_filename(p1), "sha256": p0.lower()}
+    entry_str = entry_str.strip('"\'`')
 
-    # Format name hash (cách nhau bởi khoảng trắng)
-    parts = entry_str.split()
-    if len(parts) == 2:
-        p0, p1 = parts[0].lower(), parts[1].lower()
-        if len(p1) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p1):
-            return {"name": _extract_base_filename(p0), "sha256": p1}
-        elif len(p0) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p0):
-            return {"name": _extract_base_filename(p1), "sha256": p0}
+    # Gom các cặp hex 2 ký tự cách nhau bởi khoảng trắng/dấu gạch ngang (chuẩn certutil Windows)
+    collapsed = re.sub(r"(?<=[0-9a-fA-F]{2})[\s\-]+(?=[0-9a-fA-F]{2})", "", entry_str)
 
-    # Nếu chỉ có mã SHA-256 (64 ký tự hex)
-    if len(entry_str) == 64 and all(c in "0123456789abcdefABCDEF" for c in entry_str):
-        return {"name": None, "sha256": entry_str.lower()}
+    # Tìm mã hash hex: ưu tiên 64 ký tự hex (chuẩn SHA-256) hoặc từ 32-64 ký tự hex
+    hex_match = re.search(r"\b([0-9a-fA-F]{64})\b", collapsed)
+    if not hex_match:
+        hex_match = re.search(r"[:=\s]([0-9a-fA-F]{32,64})\b", collapsed)
+        if not hex_match:
+            hex_match = re.search(r"\b([0-9a-fA-F]{32,64})\b", collapsed)
 
-    # Chỉ có tên file/đường dẫn
-    return {"name": _extract_base_filename(entry_str), "sha256": None}
+    found_hash = None
+    remaining_text = collapsed
+    if hex_match:
+        found_hash = hex_match.group(1).lower()
+        remaining_text = (collapsed[:hex_match.start()] + " " + collapsed[hex_match.end():]).strip()
+
+    if remaining_text:
+        # Loại bỏ các tiền tố / hậu tố nhãn như sha256, sha-256, sha, hash, certutil
+        remaining_text = re.sub(r"\b(sha-?256|sha|hash|certutil)\b", "", remaining_text, flags=re.IGNORECASE)
+        # Bỏ các ký tự phân cách dư thừa
+        remaining_text = re.sub(r"^[\s:=,\-\[\]\(\)]+|[\s:=,\-\[\]\(\)]+$", "", remaining_text).strip()
+
+    found_name = None
+    if remaining_text:
+        found_name = _extract_base_filename(remaining_text)
+        if not found_name or found_name in ("none", "null", ""):
+            found_name = None
+
+    return {"name": found_name, "sha256": found_hash}
 
 
 def get_system_known_app_hashes() -> dict[str, str]:
@@ -210,6 +271,9 @@ def check_process_rule(
         r = parse_app_rule_entry(entry)
         if r.get("sha256") and r.get("name"):
             hash_to_identity[r["sha256"]] = r["name"]
+        elif r.get("sha256") and not r.get("name"):
+            if r["sha256"] not in hash_to_identity:
+                hash_to_identity[r["sha256"]] = f"SHA256-{r['sha256'][:8]}"
 
     parsed_rules = [parse_app_rule_entry(entry) for entry in raw_list]
 
@@ -276,7 +340,8 @@ def check_process_rule(
             # TH 1: Rule chỉ định mã hash
             if r_hash:
                 if h_proc and h_proc == r_hash:
-                    return True, f"Khớp mã SHA-256 bị cấm {r_name or ''} ({r_hash[:12]}...)", identified_app
+                    lbl = f" {r_name}" if r_name else ""
+                    return True, f"Khớp mã SHA-256 bị cấm{lbl} ({r_hash[:12]}...)", identified_app
 
             # TH 2: Rule chỉ định tên ứng dụng
             if r_name:
@@ -830,6 +895,26 @@ class PolicyEnforcer:
                     continue
 
                 pexe = pinfo.get("exe")
+                if not pexe:
+                    try:
+                        pexe = proc.exe()
+                    except Exception:
+                        pexe = None
+                if not pexe:
+                    try:
+                        cmd = proc.cmdline()
+                        if cmd and cmd[0]:
+                            cand = cmd[0].strip().strip('"').strip("'")
+                            if os.path.isfile(cand):
+                                pexe = cand
+                    except Exception:
+                        pass
+                if not pexe:
+                    try:
+                        pexe = shutil.which(pname)
+                    except Exception:
+                        pass
+
                 proc_sha256 = None
                 if pexe:
                     proc_sha256 = get_file_sha256(pexe)

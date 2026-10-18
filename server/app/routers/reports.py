@@ -5,17 +5,216 @@ Hỗ trợ:
 - POST /reports/cleanup: Tự động dọn dẹp nhật ký, sự kiện quá 90 ngày.
 - POST /reports/{child_id}/purge: Xóa toàn bộ dữ liệu của con trên Server và phát lệnh xóa sạch bộ đệm Agent.
 """
+import io
+import json
+import unicodedata
 from collections import Counter
 from datetime import datetime, timedelta
-import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app import models
 from app.database import get_db
 
 router = APIRouter(tags=["reports"])
+
+
+def remove_accents(input_str: str) -> str:
+    """Loại bỏ dấu tiếng Việt để xuất tương thích hoàn hảo font chuẩn PDF Type 1 (Helvetica)."""
+    if not input_str:
+        return ""
+    s = input_str.replace("đ", "d").replace("Đ", "D")
+    nfkd = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in nfkd if not unicodedata.combining(c))
+
+
+def sanitize_pdf_text(text: str) -> str:
+    clean = remove_accents(str(text))
+    return clean.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def generate_weekly_report_pdf(child_name: str, stats: dict) -> bytes:
+    """Sinh tệp PDF 1.4 chuẩn bằng pure-Python không phụ thuộc thư viện ngoài."""
+    stream_ops = []
+
+    def op(s: str):
+        stream_ops.append(s)
+
+    # 1. Header Banner
+    op("0.13 0.39 0.92 rg")  # Primary blue
+    op("40 750 515 52 re f") # Filled rectangle
+    op("BT /F2 16 Tf 1 1 1 rg 55 770 Td (CHILDGUARD - BAO CAO HOAT DONG TUAN) Tj ET")
+    op("BT /F1 10 Tf 0.9 0.95 1 rg 55 756 Td (He thong giam sat va bao ve an toan tre em tren khong gian mang) Tj ET")
+
+    # 2. Child info & Metadata
+    child_clean = sanitize_pdf_text(child_name or "Be")
+    now_str = datetime.utcnow().strftime("%d/%m/%Y")
+    op("BT /F2 11 Tf 0.1 0.1 0.1 rg 40 720 Td (Thong tin hoc sinh / Thiet bi:) Tj ET")
+    op(f"BT /F1 11 Tf 0.2 0.2 0.2 rg 190 720 Td ({child_clean}) Tj ET")
+
+    op("BT /F2 11 Tf 0.1 0.1 0.1 rg 340 720 Td (Thoi gian xuat:) Tj ET")
+    op(f"BT /F1 11 Tf 0.2 0.2 0.2 rg 430 720 Td ({now_str}) Tj ET")
+
+    # Đường kẻ ngang phân cách
+    op("0.85 0.88 0.92 RG 1 w 40 708 m 555 708 l S")
+
+    # 3. Summary Cards (3 cards)
+    # Card 1: Today Usage
+    today_min = stats.get("today_screen_time_minutes", 0)
+    quota = stats.get("daily_quota", 120)
+    op("0.96 0.97 0.99 rg 40 640 160 55 re f")
+    op("0.85 0.88 0.92 RG 1 w 40 640 160 55 re S")
+    op("BT /F1 9 Tf 0.4 0.4 0.4 rg 50 678 Td (THOI GIAN DUNG HOM NAY) Tj ET")
+    op(f"BT /F2 15 Tf 0.13 0.39 0.92 rg 50 658 Td ({today_min:.1f} / {quota} phut) Tj ET")
+
+    # Card 2: Blocked Apps
+    blocked_apps = stats.get("top_blocked_apps", [])
+    total_blocked_apps = sum(a.get("count", 0) for a in blocked_apps)
+    op("0.96 0.97 0.99 rg 215 640 160 55 re f")
+    op("0.85 0.88 0.92 RG 1 w 215 640 160 55 re S")
+    op("BT /F1 9 Tf 0.4 0.4 0.4 rg 225 678 Td (UNG DUNG BI CHAN) Tj ET")
+    op(f"BT /F2 15 Tf 0.85 0.2 0.2 rg 225 658 Td ({len(blocked_apps)} app ({total_blocked_apps} lan)) Tj ET")
+
+    # Card 3: Blocked Webs
+    blocked_webs = stats.get("top_blocked_webs", [])
+    total_blocked_webs = sum(w.get("count", 0) for w in blocked_webs)
+    op("0.96 0.97 0.99 rg 395 640 160 55 re f")
+    op("0.85 0.88 0.92 RG 1 w 395 640 160 55 re S")
+    op("BT /F1 9 Tf 0.4 0.4 0.4 rg 405 678 Td (TEN MIEN BI CHAN) Tj ET")
+    op(f"BT /F2 15 Tf 0.92 0.55 0.1 rg 405 658 Td ({len(blocked_webs)} domain ({total_blocked_webs} lan)) Tj ET")
+
+    # 4. Weekly Bar Chart
+    op("BT /F2 12 Tf 0.1 0.1 0.1 rg 40 610 Td (Bieu do thoi luong su dung 7 ngay qua (phut)) Tj ET")
+    op("0.98 0.98 0.99 rg 40 470 515 125 re f")
+    op("0.88 0.90 0.94 RG 1 w 40 470 515 125 re S")
+    # Trục cơ sở Y=495
+    op("0.8 0.8 0.8 RG 1 w 60 495 m 535 495 l S")
+
+    daily_list = stats.get("daily_list", [])
+    max_val = max([d.get("minutes", 0) for d in daily_list] + [quota, 60.0])
+    bar_width = 32
+    spacing = 65
+
+    for idx, item in enumerate(daily_list[:7]):
+        day_str = sanitize_pdf_text(item.get("day", ""))
+        mins = float(item.get("minutes", 0))
+        bar_h = min(80, max(4, int((mins / max_val) * 80))) if mins > 0 else 0
+        bx = 75 + idx * spacing
+
+        # Cột biểu đồ
+        if mins > 0:
+            if mins > quota:
+                op(f"0.9 0.25 0.25 rg {bx} 495 {bar_width} {bar_h} re f")
+            else:
+                op(f"0.15 0.45 0.95 rg {bx} 495 {bar_width} {bar_h} re f")
+            op(f"BT /F2 8 Tf 0.2 0.2 0.2 rg {bx} {495 + bar_h + 4} Td ({mins:.0f}p) Tj ET")
+        else:
+            op(f"0.85 0.85 0.85 rg {bx} 495 {bar_width} 2 re f")
+
+        op(f"BT /F1 9 Tf 0.4 0.4 0.4 rg {bx + 2} 482 Td ({day_str}) Tj ET")
+
+    # 5. Top 5 Blocked Apps & Top 5 Blocked Webs
+    table_y = 430
+    op(f"BT /F2 11 Tf 0.1 0.1 0.1 rg 40 {table_y} Td (Top ung dung bi chan nhieu nhat) Tj ET")
+    op(f"BT /F2 11 Tf 0.1 0.1 0.1 rg 295 {table_y} Td (Top ten mien bi chan nhieu nhat) Tj ET")
+
+    table_y -= 14
+    # Header bảng app
+    op(f"0.92 0.94 0.97 rg 40 {table_y} 245 18 re f")
+    op(f"BT /F2 9 Tf 0.2 0.2 0.2 rg 45 {table_y + 5} Td (STT) Tj ET")
+    op(f"BT /F2 9 Tf 0.2 0.2 0.2 rg 75 {table_y + 5} Td (Ten ung dung / Process) Tj ET")
+    op(f"BT /F2 9 Tf 0.2 0.2 0.2 rg 235 {table_y + 5} Td (So lan) Tj ET")
+
+    # Header bảng web
+    op(f"0.92 0.94 0.97 rg 295 {table_y} 260 18 re f")
+    op(f"BT /F2 9 Tf 0.2 0.2 0.2 rg 300 {table_y + 5} Td (STT) Tj ET")
+    op(f"BT /F2 9 Tf 0.2 0.2 0.2 rg 330 {table_y + 5} Td (Ten mien website) Tj ET")
+    op(f"BT /F2 9 Tf 0.2 0.2 0.2 rg 505 {table_y + 5} Td (So lan) Tj ET")
+
+    row_y = table_y - 18
+    for i in range(5):
+        bg = "0.98 0.98 0.99" if i % 2 == 1 else "1 1 1"
+        op(f"{bg} rg 40 {row_y} 245 16 re f")
+        op(f"{bg} rg 295 {row_y} 260 16 re f")
+
+        # Row App
+        if i < len(blocked_apps):
+            app = blocked_apps[i]
+            a_name = sanitize_pdf_text(app.get("name", ""))[:24]
+            a_cnt = str(app.get("count", 0))
+            op(f"BT /F1 8 Tf 0.3 0.3 0.3 rg 48 {row_y + 4} Td ({i+1}) Tj ET")
+            op(f"BT /F1 8 Tf 0.1 0.1 0.1 rg 75 {row_y + 4} Td ({a_name}) Tj ET")
+            op(f"BT /F2 8 Tf 0.8 0.1 0.1 rg 245 {row_y + 4} Td ({a_cnt}) Tj ET")
+        else:
+            op(f"BT /F1 8 Tf 0.6 0.6 0.6 rg 75 {row_y + 4} Td (-) Tj ET")
+
+        # Row Web
+        if i < len(blocked_webs):
+            web = blocked_webs[i]
+            w_name = sanitize_pdf_text(web.get("name", ""))[:28]
+            w_cnt = str(web.get("count", 0))
+            op(f"BT /F1 8 Tf 0.3 0.3 0.3 rg 303 {row_y + 4} Td ({i+1}) Tj ET")
+            op(f"BT /F1 8 Tf 0.1 0.1 0.1 rg 330 {row_y + 4} Td ({w_name}) Tj ET")
+            op(f"BT /F2 8 Tf 0.8 0.4 0.0 rg 515 {row_y + 4} Td ({w_cnt}) Tj ET")
+        else:
+            op(f"BT /F1 8 Tf 0.6 0.6 0.6 rg 330 {row_y + 4} Td (-) Tj ET")
+
+        row_y -= 16
+
+    # 6. Footer Note
+    op("0.85 0.88 0.92 RG 1 w 40 80 m 555 80 l S")
+    op("BT /F1 8 Tf 0.5 0.5 0.5 rg 40 68 Td (Bao cao duoc tao tu dong tu co so du lieu ChildGuard Gateway. Thoi han luu tru du lieu nhat ky: 90 ngay.) Tj ET")
+    op("BT /F1 8 Tf 0.5 0.5 0.5 rg 40 56 Td (Tuan thu quy dinh ve bao ve du lieu va an toan thong tin cho tre em tren moi truong mang theo Nghi dinh 13/2023/ND-CP.) Tj ET")
+
+    content_str = "\n".join(stream_ops)
+    content_bytes = content_str.encode("latin-1", errors="replace")
+
+    # Build PDF Objects
+    objects = []
+    # 1: Catalog
+    objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+    # 2: Pages
+    objects.append(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+    # 3: Page
+    objects.append(
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] "
+        b"/Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>"
+    )
+    # 4: Font F1 (Helvetica)
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+    # 5: Font F2 (Helvetica-Bold)
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+    # 6: Contents Stream
+    objects.append(
+        f"<< /Length {len(content_bytes)} >>\nstream\n".encode("ascii")
+        + content_bytes
+        + b"\nendstream"
+    )
+
+    out = io.BytesIO()
+    out.write(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+
+    for i, obj in enumerate(objects, 1):
+        offsets.append(out.tell())
+        out.write(f"{i} 0 obj\n".encode("ascii"))
+        out.write(obj)
+        out.write(b"\nendobj\n")
+
+    xref_pos = out.tell()
+    out.write(f"xref\n0 {len(offsets)}\n".encode("ascii"))
+    out.write(b"0000000000 65535 f \n")
+    for off in offsets[1:]:
+        out.write(f"{off:010d} 00000 n \n".encode("ascii"))
+
+    out.write(b"trailer\n")
+    out.write(f"<< /Size {len(offsets)} /Root 1 0 R >>\n".encode("ascii"))
+    out.write(b"startxref\n")
+    out.write(f"{xref_pos}\n".encode("ascii"))
+    out.write(b"%%EOF\n")
+
+    return out.getvalue()
 
 
 def cleanup_old_logs(db: Session, days: int = 90) -> dict:
@@ -222,6 +421,22 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
 def get_child_reports(child_id: str, db: Session = Depends(get_db)):
     """API tổng hợp dữ liệu sử dụng máy của trẻ từ EventLog."""
     return get_child_stats_summary(child_id, db)
+
+
+@router.get("/reports/{child_id}/pdf")
+def export_child_weekly_report_pdf(child_id: str, db: Session = Depends(get_db)):
+    """Xuất file PDF báo cáo tuần cho một trẻ."""
+    child = db.get(models.Child, child_id)
+    if child is None:
+        raise HTTPException(status_code=404, detail="child_not_found")
+    stats = get_child_stats_summary(child_id, db)
+    pdf_bytes = generate_weekly_report_pdf(child.display_name, stats)
+    filename = f"childguard_weekly_report_{child.id[:8]}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/reports/cleanup")

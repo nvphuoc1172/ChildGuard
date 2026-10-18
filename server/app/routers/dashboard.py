@@ -24,7 +24,11 @@ from app import models, security
 from app.database import get_db
 from app.deps import get_optional_parent
 from app.routers.commands import manager
-from app.routers.reports import cleanup_old_logs, get_child_stats_summary
+from app.routers.reports import (
+    cleanup_old_logs,
+    generate_weekly_report_pdf,
+    get_child_stats_summary,
+)
 
 router = APIRouter(tags=["dashboard"])
 
@@ -1030,6 +1034,39 @@ def reports_page(
             "cleaned": cleaned,
             "retention_days": 90,
         },
+    )
+
+
+@router.get("/dashboard/reports/export-pdf")
+def export_reports_pdf(
+    child_id: str | None = None,
+    db: Session = Depends(get_db),
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """Xuất file PDF báo cáo tuần trên Dashboard phụ huynh."""
+    if not parent:
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
+
+    selected_child = None
+    if child_id:
+        selected_child = db.get(models.Child, child_id)
+    if not selected_child:
+        selected_child = (
+            db.query(models.Child).filter(models.Child.parent_id == parent.id).first()
+        )
+    if not selected_child:
+        selected_child = db.query(models.Child).first()
+
+    if not selected_child:
+        raise HTTPException(status_code=404, detail="child_not_found")
+
+    stats = get_child_stats_summary(selected_child.id, db)
+    pdf_bytes = generate_weekly_report_pdf(selected_child.display_name, stats)
+    filename = f"childguard_weekly_report_{selected_child.id[:8]}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

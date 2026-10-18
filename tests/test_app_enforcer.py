@@ -279,3 +279,79 @@ def test_dashboard_save_policy_with_app_mode(client, db_session):
     app_rules2 = json.loads(pol2.app_rules_json)
     assert app_rules2["mode"] == "blacklist"
     assert f"game.exe:{dummy_hash}" in app_rules2["blacklist"]
+
+
+def test_sha256_rule_variations_parsing_and_blocking():
+    """Kiểm tra toàn diện tất cả định dạng nhập SHA-256:
+    - tên tiến trình:sha-256 (game.exe:hash, game.exe:sha256:hash, game.exe:sha-256:hash, game.exe hash)
+    - chỉ nhập sha-256 (hash, sha256:hash, sha-256:hash, SHA256: hash)
+    - đầu ra certutil cách nhau bằng khoảng trắng
+    - chặn cả khi đổi tên tiến trình (anti-cheat)
+    """
+    dummy_hash = "3a52140a3224b7a19280e22709db17e45ad5b0c95a28c304d6e9f1a23456789a"
+    certutil_hash_spaced = "3a 52 14 0a 32 24 b7 a1 92 80 e2 27 09 db 17 e4 5a d5 b0 c9 5a 28 c3 04 d6 e9 f1 a2 34 56 78 9a"
+
+    # 1. Các định dạng "tên tiến trình:sha-256"
+    for inp in [
+        f"game.exe:{dummy_hash}",
+        f"game.exe:sha256:{dummy_hash}",
+        f"game.exe:sha-256:{dummy_hash}",
+        f"game.exe {dummy_hash}",
+        f"C:\\Games\\game.exe:{dummy_hash}",
+    ]:
+        p = parse_app_rule_entry(inp)
+        assert p["name"] == "game.exe", f"Failed on input: {inp}"
+        assert p["sha256"] == dummy_hash, f"Failed on input: {inp}"
+
+        # Cả phía server cũng phân tích chính xác tương tự
+        p_srv = security.parse_app_rule_entry(inp)
+        assert p_srv["name"] == "game.exe"
+        assert p_srv["sha256"] == dummy_hash
+
+    # 2. Các định dạng "chỉ nhập sha-256"
+    for inp in [
+        dummy_hash,
+        f"sha256:{dummy_hash}",
+        f"sha-256:{dummy_hash}",
+        f"SHA256: {dummy_hash}",
+        f"sha-256 = {dummy_hash}",
+        certutil_hash_spaced,
+        f"sha256: {certutil_hash_spaced}",
+    ]:
+        p = parse_app_rule_entry(inp)
+        assert p["name"] is None, f"Expected name=None for input: {inp}, got {p['name']}"
+        assert p["sha256"] == dummy_hash, f"Expected sha256={dummy_hash} for input: {inp}, got {p['sha256']}"
+
+        p_srv = security.parse_app_rule_entry(inp)
+        assert p_srv["name"] is None
+        assert p_srv["sha256"] == dummy_hash
+
+    # 3. Thực thi chặn: Quy tắc CHỈ NHẬP SHA-256 (không tên app)
+    # Tiến trình game.exe có mã hash trùng khớp -> PHẢI BỊ CHẶN!
+    is_blocked, reason, identified = check_process_rule(
+        proc_name="random_game.exe",
+        proc_sha256=dummy_hash,
+        app_rules={"mode": "blacklist", "blacklist": [f"sha256:{dummy_hash}"]},
+    )
+    assert is_blocked is True
+    assert "Khớp mã SHA-256 bị cấm" in reason
+
+    # 4. Thực thi chặn: Quy tắc TÊN:SHA-256
+    # Trẻ đổi tên game.exe thành calc.exe hòng qua mặt -> Vẫn bị nhận diện qua SHA-256 và BỊ CHẶN!
+    is_blocked, reason, identified = check_process_rule(
+        proc_name="calc.exe",
+        proc_sha256=dummy_hash,
+        app_rules={"mode": "blacklist", "blacklist": [f"game.exe:sha256:{dummy_hash}"]},
+    )
+    assert is_blocked is True
+    assert "Khớp mã SHA-256 bị cấm" in reason or "giả mạo" in reason
+
+    # 5. Nếu tiến trình có hash KHÁC với hash bị cấm của quy tắc tên:hash
+    diff_hash = "bbbb1111222233334444555566667777888899990000aaaabbbbccccddddeeee"
+    is_blocked, reason, identified = check_process_rule(
+        proc_name="game.exe",
+        proc_sha256=diff_hash,
+        app_rules={"mode": "blacklist", "blacklist": [f"game.exe:sha256:{dummy_hash}"]},
+    )
+    assert is_blocked is False
+

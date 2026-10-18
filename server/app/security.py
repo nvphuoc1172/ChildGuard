@@ -3,6 +3,7 @@
 Không phụ thuộc framework — để test độc lập dễ dàng (xem tests/test_enroll.py).
 """
 import hashlib
+import re
 import secrets
 from datetime import datetime, timedelta
 
@@ -152,54 +153,58 @@ def _extract_base_filename(p: str) -> str:
 
 
 def parse_app_rule_entry(entry: str | dict) -> dict:
-    """Chuẩn hóa mục quy tắc ứng dụng hỗ trợ đối chiếu SHA-256.
-
-    Hỗ trợ:
-      - "game.exe"
-      - "game.exe:a3c5...64hex..."
-      - "C:\\Path\\game.exe:a3c5..."
-      - "game.exe a3c5..."
-      - "a3c5...64hex..." (chỉ có sha256)
-      - {"name": "game.exe", "sha256": "a3c5..."}
+    """Chuẩn hóa mục quy tắc ứng dụng hỗ trợ tối đa các định dạng:
+      - Tên tiến trình: "game.exe", "C:\\Games\\game.exe"
+      - Tên tiến trình kèm hash: "game.exe:a3c5...", "game.exe:sha256:a3c5...", "game.exe a3c5..."
+      - Chỉ nhập SHA-256: "a3c5...64hex...", "sha256:a3c5...", "sha-256:a3c5..."
+      - Đầu ra Certutil có khoảng trắng: "a3 c5 14 ... 64hex..."
+      - Dạng dict: {"name": "game.exe", "sha256": "a3c5..."}
     Trả về dict: {"name": str | None, "sha256": str | None}
     """
-    from pathlib import Path
-
     if isinstance(entry, dict):
         name = entry.get("name") or entry.get("app") or entry.get("process")
         h = entry.get("sha256") or entry.get("hash")
         name_clean = _extract_base_filename(str(name)) if name else None
         h_clean = str(h).strip().lower() if h else None
-        return {"name": name_clean, "sha256": h_clean}
+        if h_clean:
+            h_clean = re.sub(r"[^0-9a-fA-F]", "", h_clean).lower()
+        return {"name": name_clean, "sha256": h_clean or None}
 
     entry_str = str(entry).strip()
     if not entry_str:
         return {"name": None, "sha256": None}
 
-    # Format name:hash (dùng rsplit để không bị nhầm ký tự ổ đĩa Windows C:\...)
-    if ":" in entry_str:
-        p0, p1 = entry_str.rsplit(":", 1)
-        p0, p1 = p0.strip(), p1.strip()
-        if len(p1) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p1):
-            return {"name": _extract_base_filename(p0), "sha256": p1.lower()}
-        if len(p0) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p0):
-            return {"name": _extract_base_filename(p1), "sha256": p0.lower()}
+    entry_str = entry_str.strip('"\'`')
 
-    # Format name hash (cách nhau bởi khoảng trắng)
-    parts = entry_str.split()
-    if len(parts) == 2:
-        p0, p1 = parts[0].lower(), parts[1].lower()
-        if len(p1) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p1):
-            return {"name": _extract_base_filename(p0), "sha256": p1}
-        elif len(p0) >= 32 and all(c in "0123456789abcdefABCDEF" for c in p0):
-            return {"name": _extract_base_filename(p1), "sha256": p0}
+    # Gom các cặp hex 2 ký tự cách nhau bởi khoảng trắng/dấu gạch ngang (chuẩn certutil Windows)
+    collapsed = re.sub(r"(?<=[0-9a-fA-F]{2})[\s\-]+(?=[0-9a-fA-F]{2})", "", entry_str)
 
-    # Nếu chỉ có mã SHA-256 (64 ký tự hex)
-    if len(entry_str) == 64 and all(c in "0123456789abcdefABCDEF" for c in entry_str):
-        return {"name": None, "sha256": entry_str.lower()}
+    # Tìm mã hash hex: ưu tiên 64 ký tự hex (chuẩn SHA-256) hoặc từ 32-64 ký tự hex
+    hex_match = re.search(r"\b([0-9a-fA-F]{64})\b", collapsed)
+    if not hex_match:
+        hex_match = re.search(r"[:=\s]([0-9a-fA-F]{32,64})\b", collapsed)
+        if not hex_match:
+            hex_match = re.search(r"\b([0-9a-fA-F]{32,64})\b", collapsed)
 
-    # Chỉ có tên file
-    return {"name": _extract_base_filename(entry_str), "sha256": None}
+    found_hash = None
+    remaining_text = collapsed
+    if hex_match:
+        found_hash = hex_match.group(1).lower()
+        remaining_text = (collapsed[:hex_match.start()] + " " + collapsed[hex_match.end():]).strip()
+
+    if remaining_text:
+        # Loại bỏ các tiền tố / hậu tố nhãn như sha256, sha-256, sha, hash, certutil
+        remaining_text = re.sub(r"\b(sha-?256|sha|hash|certutil)\b", "", remaining_text, flags=re.IGNORECASE)
+        # Bỏ các ký tự phân cách dư thừa
+        remaining_text = re.sub(r"^[\s:=,\-\[\]\(\)]+|[\s:=,\-\[\]\(\)]+$", "", remaining_text).strip()
+
+    found_name = None
+    if remaining_text:
+        found_name = _extract_base_filename(remaining_text)
+        if not found_name or found_name in ("none", "null", ""):
+            found_name = None
+
+    return {"name": found_name, "sha256": found_hash}
 
 
 
