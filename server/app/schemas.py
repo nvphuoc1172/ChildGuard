@@ -1,4 +1,8 @@
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.event_contract import SUBJECT_EVENT_TYPES, normalize_event_subject
 
 
 class HeartbeatRequest(BaseModel):
@@ -76,12 +80,31 @@ class CommandAckRequest(BaseModel):
 
 # --- Event Batch Schemas ---
 class EventItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     idempotency_key: str = Field(..., min_length=8, max_length=64)
-    event_type: str = Field(..., description="screen_time | app_blocked | web_blocked | degraded_mode")
+    type: Literal[
+        "app_start",
+        "app_stop",
+        "domain_query",
+        "blocked_app",
+        "blocked_domain",
+        "quota_warning",
+        "locked",
+        "unlock_request",
+        "override_granted",
+    ]
     subject: str | None = None
     duration_sec: int = Field(default=0, ge=0)
     policy_version: int | None = None
     created_at: str | None = None
+
+    @model_validator(mode="after")
+    def validate_and_normalize_subject(self):
+        self.subject = normalize_event_subject(self.type, self.subject)
+        if self.type in SUBJECT_EVENT_TYPES and not self.subject:
+            raise ValueError(f"subject is required for event type {self.type!r}")
+        return self
 
 
 class BatchEventsRequest(BaseModel):

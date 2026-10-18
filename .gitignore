@@ -16,6 +16,10 @@ certs/
 *.db-wal
 *.db-shm
 data/
+!server/data/
+server/data/*
+!server/data/default_blocked_domains.txt
+!server/data/website_categories.csv
 
 # Build
 build/

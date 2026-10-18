@@ -1,6 +1,6 @@
 # ChildGuard (OGK) — Thiết kế Kiến trúc Hệ thống
 
-> Phiên bản: 0.1 (draft thiết kế trước khi code)
+> Phiên bản: 0.2 (cập nhật hợp đồng sự kiện và báo cáo Dashboard)
 > Phạm vi: Agent Windows 10/11, OGK-Server (FastAPI), Dashboard phụ huynh, giao thức đồng bộ.
 
 ---
@@ -88,12 +88,67 @@ Bảng chính (SQLAlchemy models), tên bảng số ít viết hoa cho ORM class
 | **Policy**       | `id` (PK), `child_id` (FK), `version`, `hmac_signature`, `quota_json`, `schedule_matrix`                                                  | Thiết lập giới hạn thời gian (JSON) và lịch biểu cho trẻ. Mỗi`Child` chỉ có duy nhất 1 `Policy`. Quan hệ **1 : N** tới `AppRule`, `WebRule`, `EventLog`.            |
 | **AppRule**      | `id` (PK), `policy_id` (FK), `process_name`, `sha256_hash`, `action`                                                                        | Quy tắc chặn/cho phép ứng dụng. Thuộc về 1`Policy`.                                                                                                                                       |
 | **WebRule**      | `id` (PK), `policy_id` (FK), `domain`, `action`                                                                                               | Quy tắc chặn/cho phép tên miền website. Thuộc về 1`Policy`.                                                                                                                               |
-| **EventLog**     | `id` (PK), `idempotency_key` (UNIQUE), `ts`, `device_id` (FK), `child_id` (FK), `type`, `subject`, `duration_sec`, `policy_id` (FK) | Ghi nhận sự kiện hệ thống/sử dụng. Trường`idempotency_key` dùng để chống đếm trùng khi agent đẩy log lên theo lô sau khi mất mạng.                                         |
+| **EventLog**     | `id` (PK), `idempotency_key` (UNIQUE), `created_at`, `device_id` (FK), `child_id` (FK), `event_type`, `subject`, `duration_sec`, `policy_version` | Ghi nhận sự kiện ứng dụng, tên miền và trạng thái kiểm soát. `event_type` chỉ nhận tập giá trị quy định tại mục 4.1; `subject` không lưu URL đầy đủ. `idempotency_key` chống ghi trùng khi Agent gửi lại lô sau khi mất mạng. |
 | **ChildRequest** | `id` (PK), `child_id` (FK), `device_id` (FK), `request_type`, `subject`, `status`, `createdAt`                                          | Lưu các yêu cầu từ phía agent của trẻ (xin thêm giờ, báo cáo chặn nhầm) để phụ huynh duyệt.                                                                                      |
 | **Command**      | `id` (PK), `device_id` (FK), `command_type`, `payload_json`, `created_at`, `received_at`, `acked_at`                                    | Hàng đợi chứa lệnh khẩn cấp (LOCK / UNLOCK / GRANT_TIME). Theo dõi thời gian tạo lệnh, agent nhận lệnh và xác nhận thành công.                                                   |
 | **AuditLog**     | `id` (PK), `parent_id` (FK), `action_type`, `ip_address`, `old_value` (JSON), `new_value` (JSON), `timestamp`                           | Lưu vết toàn bộ thay đổi cấu hình từ phụ huynh, đảm bảo tính minh bạch. Thuộc về 1`Parent`.                                                                                     |
 
 **Idempotency**: `idempotency_key` = `hash(device_id + local_event_id)`, sinh **tại agent** khi sự kiện xảy ra (không phải khi gửi) — vì vậy vẫn đúng cả khi agent gửi lại nhiều lần do mất kết nối giữa chừng.
+
+### 4.1. Hợp đồng Event Item
+
+Mọi phần của hệ thống (Agent, API, cơ sở dữ liệu, báo cáo và Dashboard) sử dụng duy nhất chín loại sự kiện sau. Trường trên Event Item truyền qua API có tên `type`; khi lưu vào `EventLog`, Server ánh xạ 1:1 sang cột `event_type`:
+
+```text
+app_start, app_stop, domain_query, blocked_app, blocked_domain,
+quota_warning, locked, unlock_request, override_granted
+```
+
+| `type` | Ý nghĩa | Quy tắc `subject` | `duration_sec` |
+| --- | --- | --- | --- |
+| `app_start` | Ứng dụng bắt đầu được sử dụng | Tên ứng dụng/tệp thực thi đã chuẩn hóa, ví dụ `chrome.exe` | `0` |
+| `app_stop` | Ứng dụng kết thúc phiên sử dụng | Cùng tên ứng dụng với `app_start` tương ứng | Thời lượng phiên ứng dụng; `0` nếu không xác định được |
+| `domain_query` | Thiết bị truy vấn một tên miền | Tên miền đăng ký cấp hai (registrable domain/eTLD+1), ví dụ `youtube.com` | `0` |
+| `blocked_app` | Agent đã chặn một ứng dụng | Tên ứng dụng/tệp thực thi đã chuẩn hóa | `0` |
+| `blocked_domain` | Agent đã chặn một truy vấn tên miền | Tên miền đăng ký cấp hai đã chuẩn hóa | `0` |
+| `quota_warning` | Đã phát cảnh báo hạn mức 10, 5, 1 phút hoặc bắt đầu ân hạn | `null` | Số giây còn lại tại lúc cảnh báo |
+| `locked` | Máy bị khóa do hạn mức, lịch hoặc lệnh phụ huynh | `null` | `0` |
+| `unlock_request` | Trẻ gửi yêu cầu mở khóa/thêm thời gian | `null` | `0` |
+| `override_granted` | Phụ huynh duyệt ngoại lệ/mở khóa/cấp thêm thời gian | `null` | Số giây được cấp thêm, nếu có |
+
+Quy tắc dữ liệu bắt buộc:
+
+- `type` là enum đóng; API trả `422` cho giá trị ngoài danh sách trên. Không tiếp tục sinh các tên cũ `screen_time`, `app_blocked`, `web_blocked`, `time_warning`. Không duy trì đồng thời hai khóa JSON `type` và `event_type`.
+- `subject` chỉ mang danh tính đối tượng. Với sự kiện ứng dụng, đây là tên ứng dụng hoặc tên tệp thực thi, không phải đường dẫn cài đặt. Với sự kiện tên miền, đây là tên miền đăng ký cấp hai, viết thường, bỏ dấu chấm cuối; tuyệt đối không chứa scheme, thông tin đăng nhập, cổng, path, query hay fragment.
+- Chuẩn hóa tên miền tại Agent trước khi ghi `event_queue`; Server chuẩn hóa/kiểm tra lại trước khi lưu. Ví dụ `https://www.news.example.com:8443/a?q=1` thành `example.com`. Với public suffix nhiều nhãn, dùng Public Suffix List để `shop.example.co.uk` thành `example.co.uk`, không cắt chuỗi thủ công.
+- `subject` bắt buộc với năm loại `app_start`, `app_stop`, `domain_query`, `blocked_app`, `blocked_domain`; bốn sự kiện trạng thái còn lại để `null`. Chuỗi rỗng bị xem là không hợp lệ.
+- `created_at` là UTC ISO-8601 và `idempotency_key` vẫn là khóa chống trùng. Việc tổng hợp dựa trên thời điểm sự kiện thực tế, không dựa trên thời điểm Server nhận lô.
+
+Event Item chuẩn trên đường truyền:
+
+```json
+{
+  "idempotency_key": "ev_6c47...",
+  "type": "blocked_domain",
+  "subject": "youtube.com",
+  "duration_sec": 0,
+  "policy_version": 4,
+  "created_at": "2026-10-18T08:30:00Z"
+}
+```
+
+Khi triển khai thay đổi, migration phải chuyển dữ liệu lịch sử `app_blocked -> blocked_app`, `web_blocked -> blocked_domain`, `time_warning -> quota_warning`. Bản ghi `screen_time` cũ chỉ được giữ để đọc báo cáo lịch sử, không phải giá trị hợp lệ cho Event Item mới và không được Agent sinh thêm.
+
+### 4.2. Dữ liệu chặn và phân loại website
+
+Hai nguồn dữ liệu có trách nhiệm tách biệt:
+
+- `server/data/default_blocked_domains.txt`: danh sách tên miền bị chặn trong policy mặc định cho trẻ 6–11 tuổi. Mỗi dòng là một tên miền đăng ký; DNS Proxy áp dụng cho cả tên miền gốc và mọi tên miền con. Khi bị chặn, Agent phát thông báo theo policy và ghi `blocked_domain`.
+- `server/data/website_categories.csv`: bảng đúng 200 website phục vụ giải thích log và báo cáo, không tự tạo quyết định chặn. Sáu giá trị category hợp lệ là `education`, `entertainment`, `social_network`, `gaming`, `age_inappropriate`, `unclassified`.
+
+Phân bổ seed hiện tại: 60 giáo dục, 40 giải trí, 30 mạng xã hội, 30 trò chơi, 20 miền mô phỏng trung tính không phù hợp lứa tuổi và 20 miền mô phỏng chờ phân loại. Không lưu hoặc truy cập miền nội dung người lớn thật để kiểm thử.
+
+Module `server/app/domain_categories.py` nạp CSV, chuẩn hóa website công khai về eTLD+1 và trả `unclassified` cho miền không có trong bảng. Việc phân loại chỉ diễn ra trên `subject` đã được chuẩn hóa; URL đầy đủ không được lưu.
 
 ---
 
@@ -216,8 +271,8 @@ http://<SERVER_IP>:8443/dashboard
 | `POST /policy`               | Session (parent, qua dashboard)                       | Tạo phiên bản policy mới cho một child                       |
 | `POST /heartbeat`            | Access token (agent)                                  | Vòng lặp 60s: gửi trạng thái, nhận version + lệnh chờ     |
 | `WS /ws/{device_id}`         | Access token (agent, qua query/header lúc handshake) | Kênh lệnh khẩn thời gian thực                                |
-| `POST /events/batch`         | Access token (agent)                                  | Gửi lô sự kiện đã đệm, kèm`idempotency_key` mỗi event |
-| `GET /reports/{child_id}`    | Session (parent)                                      | Báo cáo tổng hợp thời gian sử dụng (ngày/tuần), top 10 app & domain bị chặn |
+| `POST /events/batch`         | Access token (agent)                                  | Gửi lô Event Item (`type`, `subject`, ...) theo mục 4.1, kiểm tra dữ liệu và chống trùng bằng `idempotency_key` |
+| `GET /reports/{child_id}`    | Session (parent)                                      | Báo cáo sử dụng ngày/tuần, toàn bộ sự kiện gần nhất, Top 10 `blocked_app` và `blocked_domain` |
 | `POST /reports/cleanup`      | Token/Session                                         | Tác vụ dọn dẹp tự động log, sự kiện, kiểm toán quá 90 ngày |
 | `POST /reports/{child_id}/purge` | Session (parent)                                  | Xóa toàn bộ dữ liệu của con (Server + phát lệnh clear_data xuống Agent) |
 | `GET /dashboard/today`       | Công khai / Session                                   | Màn hình "Hôm nay em đã dùng gì" cho trẻ với hình ảnh trực quan |
@@ -225,6 +280,30 @@ http://<SERVER_IP>:8443/dashboard
 | `GET /audit`                 | Session (parent, chỉ xem của con mình)             | Xem nhật ký kiểm toán liên quan                              |
 
 Tất cả endpoint có rate-limit theo `device_id` hoặc `parent_id` (vd `slowapi` middleware) để chống lạm dụng heartbeat/spam.
+
+### 6.1. Quy tắc tổng hợp Nhật ký sử dụng
+
+- `recent_events` lấy trực tiếp từ `EventLog` của trẻ, sắp xếp `created_at DESC`, giới hạn 20 bản ghi sau khi áp dụng phạm vi thời gian của báo cáo. Không lọc riêng sự kiện sử dụng máy và không dùng chuỗi `if/elif` chỉ nhận một vài loại cũ.
+- Dashboard ánh xạ đủ chín `event_type` sang nhãn tiếng Việt: Bắt đầu ứng dụng, Dừng ứng dụng, Truy vấn tên miền, Chặn ứng dụng, Chặn tên miền, Cảnh báo hạn mức, Đã khóa máy, Yêu cầu mở khóa và Đã cấp ngoại lệ. Loại không hợp lệ không được lưu; dữ liệu lịch sử chưa di trú hiển thị nhãn thô để phục vụ tra soát.
+- Cột “Đối tượng” hiển thị `subject` cho sự kiện app/domain và ký hiệu `—` cho sự kiện trạng thái. Cột “Thời lượng” chỉ hiện giá trị khi `duration_sec > 0`.
+- Top 10 ứng dụng bị chặn chỉ đếm các bản ghi có `event_type = 'blocked_app'` và `subject` hợp lệ. Top 10 tên miền bị chặn chỉ đếm `event_type = 'blocked_domain'`. Hai bảng phản ánh **số lần chặn thực tế**, không suy ra từ danh sách chính sách và không đếm `app_start`, `domain_query`.
+- Trước khi `GROUP BY`, Server chuẩn hóa app theo `trim + casefold` và domain theo eTLD+1 để các biến thể viết hoa, `www` hoặc subdomain không tách thành nhiều hạng. Kết quả sắp xếp theo `count DESC`, rồi `subject ASC` để ổn định khi bằng số lần.
+- Truy vấn báo cáo luôn ràng buộc `child_id` thuộc phụ huynh đang đăng nhập; khoảng thời gian Top 10 trên giao diện là 7 ngày gần nhất và được ghi rõ cạnh tiêu đề.
+
+Ví dụ kết quả rút gọn:
+
+```json
+{
+  "recent_events": [
+    {"type": "blocked_domain", "subject": "youtube.com", "duration_sec": 0},
+    {"type": "quota_warning", "subject": null, "duration_sec": 300}
+  ],
+  "top_blocked_apps": [{"name": "game.exe", "count": 4}],
+  "top_blocked_domains": [{"name": "youtube.com", "count": 7}]
+}
+```
+
+Tên khóa trả về được thống nhất là `top_blocked_domains`; loại bỏ tên cũ `top_blocked_webs` khỏi router, template và PDF để tránh một nguồn dữ liệu có hai tên.
 
 ---
 
@@ -263,6 +342,7 @@ ChildGuard/
 │   │   ├── main.py                ✅ Khởi tạo FastAPI app, mount đầy đủ 9 router API + dashboard
 │   │   │                              + static files, endpoint GET /ping.
 │   │   ├── database.py            ✅ Engine SQLAlchemy, bật WAL mode + foreign_keys, get_db().
+│   │   ├── domain_categories.py    ✅ Nạp bảng 200 website và phân loại domain cho báo cáo.
 │   │   ├── models.py              ✅ 10 bảng đầy đủ theo Design: Parent, Child, Device,
 │   │   │                              EnrollmentCode, Token, Policy, Command, EventLog,
 │   │   │                              ChildRequest, AuditLog.
@@ -282,6 +362,9 @@ ChildGuard/
 │   │       ├── auth.py            ✅ POST /auth/login, /auth/logout, GET /auth/me
 │   │       └── dashboard.py       ✅ Toàn bộ router giao diện web phụ huynh (overview, policy,
 │   │                                  requests, reports, audit, action command).
+│   ├── data/
+│   │   ├── default_blocked_domains.txt ✅ Danh sách chặn của policy mặc định 6–11 tuổi.
+│   │   └── website_categories.csv      ✅ 200 website thuộc đúng 6 nhóm báo cáo.
 │   ├── scripts/
 │   │   ├── create_enrollment_code.py ✅ CLI tạo mã ghép đôi + tài khoản demo.
 │   │   └── create_test_command.py ✅ CLI tạo lệnh thử nghiệm cho thiết bị.
@@ -295,8 +378,9 @@ ChildGuard/
 │   │   │                              cấp (Khóa ngay, Mở khóa, +15p, +30p), duyệt yêu cầu nhanh.
 │   │   ├── policy.html            ✅ Quản lý chính sách: Quota ngày, Lịch tuần, App blacklist, Web blacklist.
 │   │   ├── requests.html          ✅ Danh sách yêu cầu xin thêm giờ của trẻ + nút Duyệt/Từ chối.
-│   │   ├── reports.html           ✅ Báo cáo thống kê trực quan screen time (ngày 24h & tuần 7d),
-│   │   │                              Top 10 app/domain bị chặn kèm số lần, nút Xóa toàn bộ dữ liệu của con tôi.
+│   │   ├── reports.html           ✅ Báo cáo thống kê trực quan thời gian sử dụng (ngày 24h & tuần 7d),
+│   │   │                              nhật ký đủ 9 loại sự kiện, Top 10 `blocked_app`/`blocked_domain`
+│   │   │                              kèm số lần, nút Xóa toàn bộ dữ liệu của con tôi.
 │   │   ├── child_today.html       ✅ Màn hình 'Hôm nay em đã dùng gì' cho trẻ: ngôn ngữ đơn giản,
 │   │   │                              hình ảnh minh họa ấm áp, phân bổ thời gian và nút xin thêm giờ.
 │   │   ├── audit.html             ✅ Nhật ký kiểm toán minh bạch theo Nghị định 13/2023.
@@ -309,7 +393,8 @@ ChildGuard/
 │   ├── test_enroll.py             ✅ 20 test tính năng ghép đôi.
 │   ├── test_heartbeat.py          ✅ 11 test nhịp tim, xác thực token, pending commands.
 │   ├── test_commands.py          ✅ 5 test tạo lệnh, WebSocket/delivery, ack command.
-│   ├── test_events_batch.py      ✅ 2 test batch upload và idempotency key deduplication.
+│   ├── test_events_batch.py      ✅ Kiểm thử enum 9 loại, quy tắc subject, chuẩn hóa domain,
+│   │                                 batch upload và idempotency key deduplication.
 │   ├── test_policy.py            ✅ 2 test cập nhật policy tăng version và lấy policy.
 │   ├── test_requests.py          ✅ 2 test tạo và phê duyệt/từ chối yêu cầu của trẻ.
 │   ├── test_app_enforcer.py      ✅ 8 test kiểm soát ứng dụng blacklist/whitelist & SHA-256.
@@ -317,9 +402,8 @@ ChildGuard/
 │   ├── test_weekly_schedule.py   ✅ 2 test ma trận lịch tuần 7x48.
 │   ├── test_screen_time_sync.py  ✅ 5 test đếm thời gian thực & đồng bộ UTC chống tua RTC.
 │   ├── test_warnings_and_grace_period.py ✅ 24 test cảnh báo trước 10, 5, 1 phút & ân hạn 60s.
-│   └── test_reports_and_retention.py ✅ 5 test báo cáo ngày/tuần, Top 10 kèm số lần,
+│   └── test_reports_and_retention.py ✅ Kiểm thử nhật ký đủ loại, Top 10 từ sự kiện chặn mới,
 │                                      retention 90 ngày tự động và xóa dữ liệu 2 chiều.
-│                                  -> TỔNG CỘNG: 91 TESTS PASS 100%.
 
 │
 ├── demo/
@@ -456,7 +540,8 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
 #### 10.2.2. Lưu trữ Cục bộ SQLite & Đồng bộ Lô Sự kiện (Agent Storage & Batch Events)
 - **Hướng phát triển**:
   - Module `agent/storage.py` quản lý database SQLite cục bộ `agent_state/agent.db`.
-  - Bảng `event_queue`: Hàng đợi lưu trữ sự kiện ngoại tuyến (`app_blocked`, `web_blocked`, `screen_time`). Mỗi sự kiện có khóa `idempotency_key = ev_<uuid>` để đảm bảo không bị đếm trùng khi gửi lại.
+  - Bảng `event_queue`: Hàng đợi lưu trữ đủ chín loại sự kiện tại mục 4.1. Mỗi sự kiện có khóa `idempotency_key = ev_<uuid>` để đảm bảo không bị đếm trùng khi gửi lại.
+  - `add_event()` kiểm tra enum và quy tắc `subject` trước khi ghi. Bản ghi cục bộ và payload đồng bộ dùng khóa `type` thống nhất; Server mới ánh xạ sang `EventLog.event_type`. Tên ứng dụng chỉ giữ tên hiển thị/tệp thực thi; tên miền được chuyển về eTLD+1 và không lưu URL đầy đủ.
   - Bảng `agent_state`: Lưu trữ số giây dùng máy hôm nay (`quota_used_seconds`), cờ khóa (`is_locked`), thời điểm liên lạc server cuối cùng (`last_server_contact_ts`).
   - Hàm `mark_events_sent`: Đánh dấu `sent = 1` và dọn dẹp các sự kiện đã được Server xác nhận.
 - **Các lỗi đã gặp**:
@@ -487,13 +572,15 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
      - Nếu truy vấn Type 28 (AAAA) $\rightarrow$ Trả về IPv6 `::`.
      - Nếu truy vấn Type 65 (HTTPS) hoặc loại khác $\rightarrow$ Trả về mã lỗi `NXDOMAIN` (RCODE = 3).
   3. **Hàm `normalize_domain`**: Tự động bóc tách và làm sạch mọi tiền tố `http://`, `https://`, số cổng và đường dẫn. Tự động gọi `ipconfig /flushdns` sau khi cập nhật.
+      - Sau khi phân tích DNS, Agent ghi `domain_query` với `subject` là eTLD+1. Nếu quyết định chặn, Agent ghi thêm `blocked_domain` cho cùng eTLD+1; không đưa QNAME đầy đủ hoặc URL vào `subject`.
+  4. **Policy mặc định từ tệp**: Khi ghép đôi thiết bị cho trẻ chưa có policy, Server đọc `server/data/default_blocked_domains.txt`, tạo `domain_rules.mode="blacklist"`, bật SafeSearch và gửi danh sách xuống Agent. Phụ huynh vẫn có thể chỉnh danh sách riêng cho từng trẻ trên Dashboard.
 
 ---
 
 #### 10.2.4. Đếm Thời gian Sử dụng & Khóa Màn hình (Policy Enforcer & Screen-time Counter)
 - **Hướng phát triển**:
   - Module `agent/enforcer.py` chạy vòng lặp mỗi 2 giây:
-    - Quét danh sách tiến trình (`psutil`), tự động ngắt ứng dụng bị cấm và ghi event `app_blocked`.
+    - Quét danh sách tiến trình (`psutil`), ghi `app_start`/`app_stop` theo vòng đời và tự động ngắt ứng dụng bị cấm với event `blocked_app`.
     - Đếm dồn thời gian sử dụng màn hình theo thời gian thực.
     - So sánh với hạn mức ngày (`daily_minutes`) và khung giờ cho phép (`schedule`).
     - Thực thi khóa màn hình bằng Win32 API `ctypes.windll.user32.LockWorkStation()`.
@@ -610,9 +697,20 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
       - Khi có thông báo mới, gọi `pystray.Icon.notify()` hiển thị Windows Toast Balloon.
       - Tạo cửa sổ nổi (floating top-most banner) đếm ngược trực tiếp trên màn hình với màu sắc phân cấp: Vàng cam (Cảnh báo 10p, 5p), Cam đậm (Khẩn cấp 1p), Đỏ đậm kèm đếm ngược từng giây (Ân hạn 60s).
     - *Kênh IPC & Lịch sử*: Endpoint `/status` và `/notifications` cung cấp thông tin `active_notification`, `in_grace_period`, `grace_seconds_left` và danh sách lịch sử phục vụ giám sát và kiểm thử.
-    - *Event Queue*: Mọi cảnh báo và ân hạn đều được ghi vào hàng đợi sự kiện SQLite (`event_type="time_warning"`) và đồng bộ lên Server.
+    - *Event Queue*: Mọi cảnh báo và thời điểm bắt đầu ân hạn đều được ghi vào SQLite với `type="quota_warning"`, `subject=null`, `duration_sec` là số giây còn lại, rồi đồng bộ lên Server.
 - **Quy tắc chuyển đổi trạng thái**:
-  - Nếu phụ huynh duyệt cấp thêm giờ (`grant_extra_minutes`), trạng thái ân hạn được giải phóng ngay lập tức, các cờ cảnh báo được xóa để chuẩn bị cho chu kỳ tiếp theo mà không làm gián đoạn trải nghiệm của trẻ.
+  - Khi máy thực sự chuyển sang khóa, Agent phát đúng một `locked`; thao tác gửi yêu cầu của trẻ phát `unlock_request`.
+  - Nếu phụ huynh duyệt cấp thêm giờ (`grant_extra_minutes`), Agent phát `override_granted`, giải phóng trạng thái ân hạn ngay lập tức và xóa các cờ cảnh báo để chuẩn bị cho chu kỳ tiếp theo mà không làm gián đoạn trải nghiệm của trẻ.
+
+---
+
+#### 10.2.9. Báo cáo website theo nhóm và nhật ký thời gian thực
+
+- Trang `/dashboard/reports` luôn có bộ chọn trẻ và chỉ cho phép chọn hồ sơ thuộc phụ huynh đang đăng nhập. Toàn bộ thống kê, website và event được lọc theo `child_id` đã chọn.
+- Báo cáo hiển thị đủ sáu nhóm website, danh sách domain trẻ đã truy vấn và tổng số phút hoạt động của từng nhóm trong từng ngày của bảy ngày gần nhất.
+- `domain_query` hiện không có sự kiện đóng tab. Vì vậy thời gian website được ghi rõ là **ước tính**: mỗi `(domain, phút)` có ít nhất một truy vấn DNS được tính một phút và các truy vấn lặp trong cùng phút được khử trùng lặp. Nếu Event Item tương lai cung cấp `duration_sec > 0`, báo cáo ưu tiên thời lượng đó.
+- Timestamp luôn được lưu dưới dạng UTC. Khi tổng hợp ngày, giờ và hiển thị trên Dashboard, Server chuyển sang `Asia/Ho_Chi_Minh` bằng `zoneinfo`; không cộng cứng 7 giờ. Do đó sự kiện `09:02:00Z` hiển thị `16:02:00` GMT+7 và được xếp vào đúng ngày địa phương.
+- Nhật ký gần nhất được truy vấn riêng bằng `ORDER BY created_at DESC, id DESC LIMIT 20`, không bị giới hạn bởi cửa sổ biểu đồ bảy ngày. Partial HTMX `/dashboard/reports/recent-events` tự tải lại mỗi 5 giây để nhận batch mới mà không làm mới toàn trang.
 
 ---
 

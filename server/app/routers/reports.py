@@ -8,16 +8,38 @@ Hỗ trợ:
 import io
 import json
 import unicodedata
-from collections import Counter
-from datetime import datetime, timedelta
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app import models
 from app.database import get_db
+from app.domain_categories import CATEGORY_DEFINITIONS, classify_domain
+from app.event_contract import normalize_app_subject, normalize_domain_subject
 
 router = APIRouter(tags=["reports"])
+REPORT_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
+DOMAIN_ACTIVITY_BUCKET_SECONDS = 60
+
+
+def utc_naive_to_report_time(value: datetime) -> datetime:
+    """Convert the database's naive-UTC timestamps to GMT+7 for reports."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(REPORT_TIMEZONE)
+
+
+def _local_period_bounds() -> tuple[datetime, datetime, datetime]:
+    """Return local now plus UTC-naive starts for today and the 7-day window."""
+    local_now = datetime.now(REPORT_TIMEZONE)
+    local_today = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_week = local_today - timedelta(days=6)
+    today_utc = local_today.astimezone(timezone.utc).replace(tzinfo=None)
+    week_utc = local_week.astimezone(timezone.utc).replace(tzinfo=None)
+    return local_now, today_utc, week_utc
 
 
 def remove_accents(input_str: str) -> str:
@@ -77,7 +99,7 @@ def generate_weekly_report_pdf(child_name: str, stats: dict) -> bytes:
     op(f"BT /F2 15 Tf 0.85 0.2 0.2 rg 225 658 Td ({len(blocked_apps)} app ({total_blocked_apps} lan)) Tj ET")
 
     # Card 3: Blocked Webs
-    blocked_webs = stats.get("top_blocked_webs", [])
+    blocked_webs = stats.get("top_blocked_domains", [])
     total_blocked_webs = sum(w.get("count", 0) for w in blocked_webs)
     op("0.96 0.97 0.99 rg 395 640 160 55 re f")
     op("0.85 0.88 0.92 RG 1 w 395 640 160 55 re S")
@@ -272,24 +294,23 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
         except Exception:
             daily_quota = 120
 
-    now = datetime.utcnow()
-    today_start = datetime(now.year, now.month, now.day)
-    week_start = today_start - timedelta(days=6)
+    local_now, today_start_utc, week_start_utc = _local_period_bounds()
+    local_today_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Lấy tất cả sự kiện trong vòng 7 ngày gần nhất
     events = (
         db.query(models.EventLog)
-        .filter(models.EventLog.child_id == child_id, models.EventLog.created_at >= week_start)
-        .order_by(models.EventLog.created_at.desc())
+        .filter(models.EventLog.child_id == child_id, models.EventLog.created_at >= week_start_utc)
+        .order_by(models.EventLog.created_at.desc(), models.EventLog.id.desc())
         .all()
     )
 
     today_screen_time_sec = 0
     blocked_apps_counter = Counter()
-    blocked_webs_counter = Counter()
+    blocked_domains_counter = Counter()
 
     # Biểu đồ theo tuần: 7 ngày (dd/mm)
-    days_keys = [(today_start - timedelta(days=i)).strftime("%d/%m") for i in range(6, -1, -1)]
+    days_keys = [(local_today_start - timedelta(days=i)).strftime("%d/%m") for i in range(6, -1, -1)]
     daily_usage = {k: 0 for k in days_keys}
 
     # Biểu đồ theo ngày: 24 mốc giờ hôm nay (00:00 -> 23:00)
@@ -301,20 +322,26 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
     evening_sec = 0     # 18:00 - 22:00
     night_sec = 0       # 22:00 - 06:00
 
-    recent_events = []
+    category_day_seconds: dict[str, Counter] = defaultdict(Counter)
+    category_domain_seconds: dict[str, Counter] = defaultdict(Counter)
+    category_domain_queries: dict[str, Counter] = defaultdict(Counter)
+    seen_domain_minutes: set[tuple[str, str, str]] = set()
 
     for ev in events:
-        day_str = ev.created_at.strftime("%d/%m")
-        if ev.event_type == "screen_time":
+        local_created_at = utc_naive_to_report_time(ev.created_at)
+        day_str = local_created_at.strftime("%d/%m")
+        # app_stop is the v2 duration event. screen_time remains read-only compatibility
+        # for reports created before the Event Item migration.
+        if ev.event_type in ("app_stop", "screen_time"):
             if day_str in daily_usage:
                 daily_usage[day_str] += ev.duration_sec
-            if ev.created_at >= today_start:
+            if ev.created_at >= today_start_utc:
                 today_screen_time_sec += ev.duration_sec
-                hour_key = ev.created_at.strftime("%H:00")
+                hour_key = local_created_at.strftime("%H:00")
                 if hour_key in hourly_usage:
                     hourly_usage[hour_key] += ev.duration_sec
 
-                ev_hour = ev.created_at.hour
+                ev_hour = local_created_at.hour
                 if 6 <= ev_hour < 12:
                     morning_sec += ev.duration_sec
                 elif 12 <= ev_hour < 18:
@@ -324,20 +351,45 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
                 else:
                     night_sec += ev.duration_sec
 
-        elif ev.event_type == "app_blocked" and ev.subject:
-            blocked_apps_counter[ev.subject] += 1
-        elif ev.event_type == "web_blocked" and ev.subject:
-            blocked_webs_counter[ev.subject] += 1
+        elif ev.event_type == "blocked_app" and ev.subject:
+            blocked_apps_counter[normalize_app_subject(ev.subject)] += 1
+        elif ev.event_type == "blocked_domain" and ev.subject:
+            blocked_domains_counter[normalize_domain_subject(ev.subject)] += 1
 
-        if len(recent_events) < 20:
-            recent_events.append(
-                {
-                    "type": ev.event_type,
-                    "subject": ev.subject or "—",
-                    "duration_sec": ev.duration_sec,
-                    "time": ev.created_at.strftime("%H:%M:%S %d/%m"),
-                }
-            )
+        if ev.event_type == "domain_query" and ev.subject:
+            domain = normalize_domain_subject(ev.subject)
+            category = classify_domain(domain)
+            category_domain_queries[category][domain] += 1
+            if ev.duration_sec > 0:
+                activity_seconds = ev.duration_sec
+            else:
+                # DNS has no tab-close event. Count at most one activity minute
+                # per domain to avoid inflating pages that trigger many queries.
+                minute_key = local_created_at.strftime("%Y-%m-%dT%H:%M")
+                bucket_key = (domain, day_str, minute_key)
+                activity_seconds = 0 if bucket_key in seen_domain_minutes else DOMAIN_ACTIVITY_BUCKET_SECONDS
+                seen_domain_minutes.add(bucket_key)
+            category_day_seconds[category][day_str] += activity_seconds
+            category_domain_seconds[category][domain] += activity_seconds
+
+    # Recent activity is independent of the seven-day chart window. This keeps
+    # the table useful even when the newest event is older than seven days.
+    newest_events = (
+        db.query(models.EventLog)
+        .filter(models.EventLog.child_id == child_id)
+        .order_by(models.EventLog.created_at.desc(), models.EventLog.id.desc())
+        .limit(20)
+        .all()
+    )
+    recent_events = [
+        {
+            "type": ev.event_type,
+            "subject": ev.subject,
+            "duration_sec": ev.duration_sec,
+            "time": utc_naive_to_report_time(ev.created_at).strftime("%H:%M:%S %d/%m/%Y"),
+        }
+        for ev in newest_events
+    ]
 
     # Chuyển đổi sang phút
     daily_minutes = {k: round(v / 60, 1) for k, v in daily_usage.items()}
@@ -346,7 +398,7 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
     remaining_minutes = max(0, round(daily_quota - today_screen_time_minutes, 1))
 
     # Top 10 ứng dụng và Top 10 tên miền bị chặn kèm số lần
-    top_apps_raw = blocked_apps_counter.most_common(10)
+    top_apps_raw = sorted(blocked_apps_counter.items(), key=lambda item: (-item[1], item[0]))[:10]
     max_app_count = top_apps_raw[0][1] if top_apps_raw else 1
     top_blocked_apps = [
         {
@@ -358,16 +410,16 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
         for idx, (name, count) in enumerate(top_apps_raw)
     ]
 
-    top_webs_raw = blocked_webs_counter.most_common(10)
-    max_web_count = top_webs_raw[0][1] if top_webs_raw else 1
-    top_blocked_webs = [
+    top_domains_raw = sorted(blocked_domains_counter.items(), key=lambda item: (-item[1], item[0]))[:10]
+    max_domain_count = top_domains_raw[0][1] if top_domains_raw else 1
+    top_blocked_domains = [
         {
             "rank": idx + 1,
             "name": name,
             "count": count,
-            "percent": min(100, round((count / max_web_count) * 100)),
+            "percent": min(100, round((count / max_domain_count) * 100)),
         }
-        for idx, (name, count) in enumerate(top_webs_raw)
+        for idx, (name, count) in enumerate(top_domains_raw)
     ]
 
     # Danh sách chuẩn hóa cho biểu đồ cột trên Dashboard
@@ -392,6 +444,33 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
         for k, v in daily_minutes.items()
     ]
 
+    website_category_usage = []
+    for definition in CATEGORY_DEFINITIONS:
+        key = definition["key"]
+        daily = [
+            {"day": day, "minutes": round(category_day_seconds[key][day] / 60, 1)}
+            for day in days_keys
+        ]
+        domains = [
+            {
+                "name": domain,
+                "minutes": round(seconds / 60, 1),
+                "queries": category_domain_queries[key][domain],
+            }
+            for domain, seconds in sorted(
+                category_domain_seconds[key].items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+        ]
+        website_category_usage.append(
+            {
+                **definition,
+                "total_minutes": round(sum(category_day_seconds[key].values()) / 60, 1),
+                "daily": daily,
+                "domains": domains,
+            }
+        )
+
     return {
         "child_id": child.id,
         "child_name": child.display_name,
@@ -406,8 +485,11 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
         "hourly_list": hourly_list,
         "daily_list": daily_list,
         "top_blocked_apps": top_blocked_apps,
-        "top_blocked_webs": top_blocked_webs,
+        "top_blocked_domains": top_blocked_domains,
         "recent_events": recent_events,
+        "website_category_usage": website_category_usage,
+        "website_category_days": days_keys,
+        "report_timezone": "GMT+7 (Asia/Ho_Chi_Minh)",
         "time_blocks": {
             "morning_minutes": round(morning_sec / 60, 1),
             "afternoon_minutes": round(afternoon_sec / 60, 1),

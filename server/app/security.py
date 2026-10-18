@@ -3,9 +3,11 @@
 Không phụ thuộc framework — để test độc lập dễ dàng (xem tests/test_enroll.py).
 """
 import hashlib
+import json
 import re
 import secrets
 from datetime import datetime, timedelta
+from pathlib import Path
 
 # Bỏ các ký tự dễ nhầm khi đọc qua điện thoại: 0/O, 1/I/L
 ENROLLMENT_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -85,11 +87,29 @@ def default_policy_payload() -> dict:
     """Chính sách mặc định khi một trẻ chưa từng có policy nào —
     an toàn-trước (quota thấp, không whitelist ứng dụng/domain nào),
     phụ huynh chỉnh lại ngay trên dashboard sau khi ghép đôi."""
+    blocked_file = Path(__file__).resolve().parent.parent / "data" / "default_blocked_domains.txt"
+    try:
+        blocked_domains = [
+            line.strip().casefold()
+            for line in blocked_file.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+    except OSError:
+        # Enrollment remains available if a deployment omits the seed file.
+        blocked_domains = []
+
     return {
         "quota_json": '{"daily_minutes": 120}',
         "schedule_json": "{}",
         "app_rules_json": '{"mode": "allow_all"}',
-        "domain_rules_json": '{"mode": "allow_all"}',
+        "domain_rules_json": json.dumps(
+            {
+                "mode": "blacklist",
+                "blacklist": blocked_domains,
+                "safesearch": True,
+            },
+            ensure_ascii=False,
+        ),
     }
 
 

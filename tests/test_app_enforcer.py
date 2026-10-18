@@ -219,9 +219,11 @@ def test_scan_and_enforce_processes_mocked(tmp_path):
 
             # Proc 2 bị kill và ghi event
             proc_renamed_game.kill.assert_called_once()
-            mock_storage.add_event.assert_called_once()
-            args, kwargs = mock_storage.add_event.call_args
-            assert kwargs["event_type"] == "app_blocked"
+            event_calls = mock_storage.add_event.call_args_list
+            # Lần quét đầu là baseline nên không phát app_start cho các process
+            # đã chạy trước Agent; sự kiện chặn thực tế vẫn phải được ghi ngay.
+            assert [call.kwargs["type"] for call in event_calls] == ["blocked_app"]
+            assert event_calls[-1].kwargs["subject"] == "notepad.exe"
 
 
 def test_dashboard_save_policy_with_app_mode(client, db_session):

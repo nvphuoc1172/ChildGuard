@@ -36,6 +36,18 @@ def create_child_request(
         created_at=now,
     )
     db.add(req)
+    db.flush()
+    db.add(
+        models.EventLog(
+            idempotency_key=f"request_{req.id}",
+            device_id=device.id,
+            child_id=device.child_id,
+            event_type="unlock_request",
+            subject=None,
+            duration_sec=0,
+            created_at=now,
+        )
+    )
     db.commit()
     db.refresh(req)
 

@@ -1,0 +1,31 @@
+<div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">
+  Hiển thị theo {{ report_timezone }} · tự cập nhật mỗi 5 giây
+</div>
+{% if recent_events %}
+<div class="table-container">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Thời gian</th>
+        <th>Loại sự kiện</th>
+        <th>Đối tượng (App / Domain)</th>
+        <th>Thời lượng</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ev in recent_events %}
+      <tr>
+        <td style="white-space: nowrap;">{{ ev.time }}</td>
+        <td><code>{{ ev.type }}</code></td>
+        <td>{% if ev.subject %}<code>{{ ev.subject }}</code>{% else %}—{% endif %}</td>
+        <td style="white-space: nowrap;">{{ (ev.duration_sec // 60)|string ~ " phút " ~ (ev.duration_sec % 60)|string ~ "s" if ev.duration_sec > 0 else "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div style="text-align: center; padding: 24px; color: var(--text-muted);">
+  Chưa có sự kiện nào được ghi nhận.
+</div>
+{% endif %}

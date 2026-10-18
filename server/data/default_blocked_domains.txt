@@ -1,0 +1,18 @@
+# Danh sách chặn mặc định cho trẻ 6-11 tuổi.
+# Mỗi dòng là một tên miền đăng ký; DNS Proxy tự chặn toàn bộ tên miền con.
+# Phụ huynh có thể thay đổi danh sách này trên trang Chính sách.
+facebook.com
+instagram.com
+tiktok.com
+snapchat.com
+x.com
+twitter.com
+reddit.com
+discord.com
+roblox.com
+steampowered.com
+epicgames.com
+fortnite.com
+leagueoflegends.com
+valorant.com
+twitch.tv

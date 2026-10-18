@@ -113,7 +113,7 @@ class SyncWorker:
         payload_events = [
             {
                 "idempotency_key": ev["idempotency_key"],
-                "event_type": ev["event_type"],
+                "type": ev["type"],
                 "subject": ev["subject"],
                 "duration_sec": ev["duration_sec"],
                 "policy_version": ev["policy_version"],

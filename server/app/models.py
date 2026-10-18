@@ -117,8 +117,9 @@ class EventLog(Base):
     idempotency_key = Column(String(64), unique=True, index=True, nullable=False)
     device_id = Column(String(32), ForeignKey("devices.id"), nullable=False, index=True)
     child_id = Column(String(32), ForeignKey("children.id"), nullable=False, index=True)
-    event_type = Column(String(50), nullable=False)  # screen_time | app_blocked | web_blocked | degraded_mode
-    subject = Column(String(255), nullable=True)  # Tên process (app) hoặc domain (web) bị chặn
+    # Event Item wire field is `type`; persisted as `event_type` for clarity in SQL.
+    event_type = Column(String(50), nullable=False)
+    subject = Column(String(255), nullable=True)  # normalized app name or registrable domain (eTLD+1)
     duration_sec = Column(Integer, default=0, nullable=False)
     policy_version = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

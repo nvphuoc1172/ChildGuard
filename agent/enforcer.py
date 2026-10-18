@@ -1,7 +1,7 @@
 """Policy Enforcer & Screen-time Counter — xem mục 3 và 3.1 trong Design.md.
 
 Chịu trách nhiệm:
-1. Quét process list mỗi 2-3s (`psutil`), terminate app bị cấm và ghi event `app_blocked`.
+1. Quét process list mỗi 2-3s, ghi app_start/app_stop và terminate app bị cấm với blocked_app.
 2. Đếm dồn thời gian dùng máy theo thời gian thực (chỉ khi người dùng đăng nhập hoạt động, không tính lúc màn hình khóa).
 3. Kiểm tra quota ngày và khung giờ cho phép trong lịch biểu (Schedule).
 4. Tự động chuyển đổi trạng thái Khóa / Mở khóa linh hoạt:
@@ -434,6 +434,9 @@ class PolicyEnforcer:
         self._subsecond_buffer = 0.0
         self._screen_time_buffer = 0
         self._last_lock_time = 0.0
+        self._last_process_scan_mono = 0.0
+        self._observed_processes: dict[int, tuple[str, float]] = {}
+        self._process_baseline_ready = False
 
         # Bộ đệm thời gian thông báo chặn app & web để chống spam
         self._last_app_block_notif: dict[str, float] = {}
@@ -486,8 +489,7 @@ class PolicyEnforcer:
             self.notification_history = self.notification_history[-50:]
 
         try:
-            subj = f"grace_60s_{restriction_type}" if milestone == 0 else f"warn_{milestone}m_{restriction_type}"
-            self.storage.add_event(event_type="time_warning", subject=subj, duration_sec=remaining_seconds)
+            self.storage.add_event(type="quota_warning", subject=None, duration_sec=remaining_seconds)
         except Exception:
             pass
 
@@ -551,7 +553,7 @@ class PolicyEnforcer:
             title="🚫 ChildGuard — Ứng dụng bị hạn chế",
             message=msg,
             level="app_blocked",
-            event_type="app_blocked",
+            event_type="blocked_app",
             subject=app_name,
         )
 
@@ -568,7 +570,7 @@ class PolicyEnforcer:
             title="🌐 ChildGuard — Trang web bị hạn chế",
             message=msg,
             level="dns_blocked",
-            event_type="web_blocked",
+            event_type="blocked_domain",
             subject=domain,
         )
 
@@ -596,9 +598,12 @@ class PolicyEnforcer:
 
     def lock_workstation(self, manual: bool = False, reason: str = ""):
         """Khóa màn hình máy tính Windows."""
+        was_locked = self.storage.get_lock_status()
         if manual:
             self.manual_locked = True
         self.storage.set_lock_status(True)
+        if not was_locked:
+            self.storage.add_event(type="locked", subject=None)
         self._last_lock_time = time.time()
 
         prefix = f" [{reason}]" if reason else ""
@@ -611,7 +616,7 @@ class PolicyEnforcer:
         else:
             print(f"[Enforcer] 🔒 Giả lập khóa màn hình (không phải Windows){prefix}")
 
-    def unlock_workstation(self):
+    def unlock_workstation(self, emit_event: bool = True):
         """Mở khóa máy (cho phép tiếp tục dùng)."""
         print("[Enforcer] 🔓 MỞ KHÓA MÁY THEO LỆNH.")
         self.manual_locked = False
@@ -621,6 +626,8 @@ class PolicyEnforcer:
         self._warned_milestones.clear()
         self.active_notification = None
         self.storage.set_lock_status(False)
+        if emit_event:
+            self.storage.add_event(type="override_granted", subject=None)
 
     def grant_extra_minutes(self, minutes: int):
         """Cộng thêm thời gian cho trẻ: giảm số giây đã tính hôm nay để trẻ có thêm thời gian."""
@@ -636,6 +643,7 @@ class PolicyEnforcer:
         with self.storage._get_connection() as conn:
             conn.execute("UPDATE agent_state SET quota_used_seconds = ?, is_locked = 0 WHERE id = 1", (reduced_used,))
             conn.commit()
+        self.storage.add_event(type="override_granted", subject=None, duration_sec=max(0, minutes * 60))
 
     def reset_usage_cache(self):
         """Xóa toàn bộ dữ liệu bộ đệm trên agent khi phụ huynh yêu cầu xóa dữ liệu."""
@@ -648,7 +656,7 @@ class PolicyEnforcer:
         self.active_notification = None
         self._subsecond_buffer = 0.0
         self.storage.clear_all_cached_data()
-        self.unlock_workstation()
+        self.unlock_workstation(emit_event=False)
 
     def _get_effective_local_datetime(self) -> datetime:
         """Lấy datetime giờ địa phương thực tế (ưu tiên timestamp đồng bộ máy chủ, an toàn với mock/fallback)."""
@@ -886,6 +894,16 @@ class PolicyEnforcer:
             return
 
         app_rules = policy.get("app_rules", {})
+        rule_mode = app_rules.get("mode", "blacklist") if isinstance(app_rules, dict) else "blacklist"
+        rule_entries = []
+        if isinstance(app_rules, dict):
+            rule_entries = app_rules.get("whitelist" if rule_mode == "whitelist" else "blacklist", []) or []
+        elif isinstance(app_rules, list):
+            rule_entries = app_rules
+        has_app_restrictions = rule_mode == "whitelist" or bool(rule_entries)
+
+        observed_now: dict[int, tuple[str, float]] = {}
+        now_mono = time.monotonic()
 
         for proc in psutil.process_iter(["pid", "name", "exe"]):
             try:
@@ -893,6 +911,26 @@ class PolicyEnforcer:
                 pname = (pinfo.get("name") or "").strip()
                 if not pname:
                     continue
+                pid = int(pinfo.get("pid") or 0)
+                normalized_name = os.path.basename(pname).casefold()
+                previous = self._observed_processes.get(pid)
+                if previous is None or previous[0] != normalized_name:
+                    if previous is not None:
+                        self.storage.add_event(
+                            type="app_stop",
+                            subject=previous[0],
+                            duration_sec=max(0, int(now_mono - previous[1])),
+                            policy_version=policy.get("version"),
+                        )
+                    if self._process_baseline_ready:
+                        self.storage.add_event(
+                            type="app_start",
+                            subject=normalized_name,
+                            policy_version=policy.get("version"),
+                        )
+                    observed_now[pid] = (normalized_name, now_mono)
+                else:
+                    observed_now[pid] = previous
 
                 pexe = pinfo.get("exe")
                 if not pexe:
@@ -916,15 +954,18 @@ class PolicyEnforcer:
                         pass
 
                 proc_sha256 = None
-                if pexe:
+                if has_app_restrictions and pexe:
                     proc_sha256 = get_file_sha256(pexe)
 
-                is_blocked, reason, identified_app = check_process_rule(
-                    proc_name=pname,
-                    proc_sha256=proc_sha256,
-                    app_rules=app_rules,
-                    known_system_hashes=self.known_system_hashes,
-                )
+                if has_app_restrictions:
+                    is_blocked, reason, identified_app = check_process_rule(
+                        proc_name=pname,
+                        proc_sha256=proc_sha256,
+                        app_rules=app_rules,
+                        known_system_hashes=self.known_system_hashes,
+                    )
+                else:
+                    is_blocked, reason, identified_app = False, "", normalized_name
 
                 if is_blocked:
                     display_name = f"{pname} (nhận diện: {identified_app})" if identified_app != pname.lower() else pname
@@ -934,8 +975,8 @@ class PolicyEnforcer:
                     except Exception:
                         proc.terminate()
                     self.storage.add_event(
-                        event_type="app_blocked",
-                        subject=display_name,
+                        type="blocked_app",
+                        subject=normalized_name,
                         duration_sec=0,
                         policy_version=policy.get("version"),
                     )
@@ -943,6 +984,17 @@ class PolicyEnforcer:
                     self.notify_app_blocked(display_name, reason=reason)
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
+
+        for pid, (app_name, started_mono) in self._observed_processes.items():
+            if pid not in observed_now:
+                self.storage.add_event(
+                    type="app_stop",
+                    subject=app_name,
+                    duration_sec=max(0, int(now_mono - started_mono)),
+                    policy_version=policy.get("version"),
+                )
+        self._observed_processes = observed_now
+        self._process_baseline_ready = True
 
     def tick(self, elapsed_float: float):
         """Thực thi một chu kỳ kiểm tra chính sách và đếm thời gian sử dụng thực."""
@@ -961,8 +1013,12 @@ class PolicyEnforcer:
             elif isinstance(ar, list):
                 ar.extend(["game.exe", "discord.exe", "roblox.exe"])
 
-        # 1. Quét và chặn ứng dụng
-        self.scan_and_enforce_processes(policy)
+        # 1. Quét và chặn ứng dụng. Throttle theo monotonic thực để các lời gọi
+        # tick dồn dập không quét/hash toàn bộ process list nhiều lần vô ích.
+        scan_mono = time.monotonic()
+        if scan_mono - self._last_process_scan_mono >= 1.5:
+            self.scan_and_enforce_processes(policy)
+            self._last_process_scan_mono = scan_mono
 
         # 2. Kiểm tra trạng thái máy: Khóa màn hình & Không hoạt động (Idle > 5 phút)
         workstation_locked = bool(self._lock_checker())
@@ -1067,22 +1123,11 @@ class PolicyEnforcer:
                 if whole_sec > 0:
                     self._subsecond_buffer -= whole_sec
                     used_seconds = self.storage.add_screen_time(whole_sec)
-                    self._screen_time_buffer += whole_sec
-
-                    # Mỗi 60 giây tích lũy tạo 1 event screen_time vào hàng đợi
-                    if self._screen_time_buffer >= 60:
-                        self.storage.add_event(
-                            event_type="screen_time",
-                            duration_sec=self._screen_time_buffer,
-                            policy_version=policy.get("version"),
-                        )
-                        self._screen_time_buffer = 0
 
     def run_loop(self, poll_interval: float = 2.0):
         """Vòng lặp chính của Enforcer."""
         self.running = True
         self._last_tick_mono = time.monotonic()
-        last_flush_mono = time.monotonic()
 
         print("[Enforcer] Bắt đầu Policy Enforcer & Screen-time Counter...")
 
@@ -1093,16 +1138,6 @@ class PolicyEnforcer:
                 self._last_tick_mono = now_mono
 
                 self.tick(elapsed_float)
-
-                if self._screen_time_buffer > 0 and (now_mono - last_flush_mono) >= 60.0:
-                    policy = self.storage.get_policy()
-                    self.storage.add_event(
-                        event_type="screen_time",
-                        duration_sec=self._screen_time_buffer,
-                        policy_version=policy.get("version"),
-                    )
-                    self._screen_time_buffer = 0
-                    last_flush_mono = now_mono
 
             except Exception as e:
                 print(f"[Enforcer] Lỗi trong vòng lặp enforcer: {e}")

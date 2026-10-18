@@ -52,7 +52,7 @@ def batch_events(
             idempotency_key=ev.idempotency_key,
             device_id=device.id,
             child_id=device.child_id,
-            event_type=ev.event_type,
+            event_type=ev.type,
             subject=ev.subject,
             duration_sec=ev.duration_sec,
             policy_version=ev.policy_version,

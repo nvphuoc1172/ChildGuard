@@ -8,7 +8,7 @@ Chịu trách nhiệm:
    - Type A (1) -> Trả về 0.0.0.0 (nếu bị cấm) hoặc SafeSearch VIP IP (nếu là search engine)
    - Type AAAA (28) -> Trả về :: (nếu bị cấm) hoặc SafeSearch IPv6 VIP
    - Type khác (HTTPS/SVCB) -> Trả về NXDOMAIN (nếu bị cấm) hoặc NOERROR để fallback IPv4
-5. Ghi nhận sự kiện web_blocked vào hàng đợi SQLite offline.
+5. Ghi nhận domain_query/blocked_domain với subject là registrable domain.
 6. Chuyển tiếp (forward) các truy vấn được phép tới Upstream DNS (8.8.8.8:53).
 """
 from __future__ import annotations
@@ -26,6 +26,11 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+
+try:
+    from event_contract import normalize_domain_subject
+except ImportError:  # package import (for example: agent.dns_proxy)
+    from .event_contract import normalize_domain_subject
 from typing import List, Set, Tuple
 
 from storage import AgentStorage
@@ -752,6 +757,14 @@ class DNSProxyServer:
                 return
 
             domain, qname_end = parse_dns_domain(data)
+            subject_domain = normalize_domain_subject(domain)
+            if subject_domain:
+                policy = self.storage.get_policy()
+                self.storage.add_event(
+                    type="domain_query",
+                    subject=subject_domain,
+                    policy_version=policy.get("version"),
+                )
 
             # 1. Danh sách Miễn chặn Vĩnh viễn (NT6) -> Forward ngay tới upstream DNS
             if is_bypass_domain(domain):
@@ -763,16 +776,16 @@ class DNSProxyServer:
                 print(f"[DNS Proxy] 🚫 CHẶN TÊN MIỀN: {domain} -> Trả về 0.0.0.0 / NXDOMAIN")
                 resp = build_blocked_response(data, qname_end)
                 self.sock.sendto(resp, client_addr)
-                # Ghi nhận sự kiện web_blocked
+                # Ghi nhận lần chặn thực tế bằng tên miền đăng ký, không lưu QNAME/URL đầy đủ.
                 policy = self.storage.get_policy()
                 self.storage.add_event(
-                    event_type="web_blocked",
-                    subject=domain,
+                    type="blocked_domain",
+                    subject=subject_domain,
                     duration_sec=0,
                     policy_version=policy.get("version"),
                 )
                 # Thông báo ra ngoài màn hình Windows cho bé
-                self.notify_dns_blocked(domain)
+                self.notify_dns_blocked(subject_domain)
                 return
 
             # 3. Cưỡng chế SafeSearch (F2 - Google, Bing, YouTube)

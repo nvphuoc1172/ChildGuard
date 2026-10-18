@@ -71,5 +71,16 @@ def auto_migrate(db_engine=engine):
             if "device_name" not in dev_cols:
                 conn.exec_driver_sql("ALTER TABLE devices ADD COLUMN device_name VARCHAR(100) DEFAULT 'Máy tính của trẻ'")
 
+        # Event Item v2 value migration. Historical screen_time rows remain
+        # readable by reports, but the ingestion API no longer accepts them.
+        res = conn.exec_driver_sql("PRAGMA table_info(event_logs)")
+        event_cols = {row[1] for row in res.fetchall()}
+        if "event_type" in event_cols:
+            conn.exec_driver_sql("UPDATE event_logs SET event_type = 'blocked_app' WHERE event_type = 'app_blocked'")
+            conn.exec_driver_sql("UPDATE event_logs SET event_type = 'blocked_domain' WHERE event_type = 'web_blocked'")
+            conn.exec_driver_sql(
+                "UPDATE event_logs SET event_type = 'quota_warning', subject = NULL WHERE event_type = 'time_warning'"
+            )
+
         conn.commit()
 

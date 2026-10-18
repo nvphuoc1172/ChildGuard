@@ -41,19 +41,20 @@ def test_batch_events_success(client, db_session):
     events = [
         {
             "idempotency_key": "k1_" + uuid.uuid4().hex,
-            "event_type": "screen_time",
+            "type": "app_stop",
+            "subject": "study.exe",
             "duration_sec": 60,
         },
         {
             "idempotency_key": "k2_" + uuid.uuid4().hex,
-            "event_type": "app_blocked",
+            "type": "blocked_app",
             "subject": "game.exe",
             "duration_sec": 0,
         },
         {
             "idempotency_key": "k3_" + uuid.uuid4().hex,
-            "event_type": "web_blocked",
-            "subject": "tiktok.com",
+            "type": "blocked_domain",
+            "subject": "https://www.news.tiktok.com/watch?v=1",
             "duration_sec": 0,
         },
     ]
@@ -71,6 +72,8 @@ def test_batch_events_success(client, db_session):
     # Kiểm tra trong DB
     logs = db_session.query(models.EventLog).filter(models.EventLog.device_id == device.id).all()
     assert len(logs) == 3
+    assert {log.event_type for log in logs} == {"app_stop", "blocked_app", "blocked_domain"}
+    assert next(log for log in logs if log.event_type == "blocked_domain").subject == "tiktok.com"
 
 
 def test_batch_events_idempotency_deduplication(client, db_session):
@@ -79,7 +82,7 @@ def test_batch_events_idempotency_deduplication(client, db_session):
     events = [
         {
             "idempotency_key": dup_key,
-            "event_type": "screen_time",
+            "type": "locked",
             "duration_sec": 60,
         }
     ]
@@ -107,3 +110,17 @@ def test_batch_events_idempotency_deduplication(client, db_session):
     # Kiểm tra trong DB chỉ có 1 bản ghi duy nhất
     logs = db_session.query(models.EventLog).filter(models.EventLog.idempotency_key == dup_key).all()
     assert len(logs) == 1
+
+
+def test_batch_events_rejects_legacy_or_unknown_type(client, db_session):
+    _device, token = _create_device(db_session)
+    for event in (
+        {"idempotency_key": "legacy_123", "event_type": "app_blocked", "subject": "game.exe"},
+        {"idempotency_key": "unknown_123", "type": "something_else"},
+    ):
+        response = client.post(
+            "/events/batch",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"events": [event]},
+        )
+        assert response.status_code == 422

@@ -14,6 +14,11 @@ import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+try:
+    from event_contract import EVENT_TYPES, SUBJECT_EVENT_TYPES, normalize_event_subject
+except ImportError:  # package import (for example: agent.storage)
+    from .event_contract import EVENT_TYPES, SUBJECT_EVENT_TYPES, normalize_event_subject
+
 
 class AgentStorage:
     def __init__(self, db_path: Path | str | None = None):
@@ -113,6 +118,12 @@ class AgentStorage:
                 """,
                 (today_str, time.time()),
             )
+            # Migrate queued events created by releases before Event Item v2.
+            conn.execute("UPDATE event_queue SET event_type = 'blocked_app' WHERE event_type = 'app_blocked'")
+            conn.execute("UPDATE event_queue SET event_type = 'blocked_domain' WHERE event_type = 'web_blocked'")
+            conn.execute("UPDATE event_queue SET event_type = 'quota_warning', subject = NULL WHERE event_type = 'time_warning'")
+            # screen_time is no longer a valid Event Item and cannot be uploaded to the strict API.
+            conn.execute("DELETE FROM event_queue WHERE event_type = 'screen_time'")
             conn.commit()
 
     def get_policy(self) -> dict:
@@ -169,8 +180,25 @@ class AgentStorage:
                     conn.execute("UPDATE agent_state SET is_locked = 0 WHERE id = 1")
             conn.commit()
 
-    def add_event(self, event_type: str, subject: str | None = None, duration_sec: int = 0, policy_version: int | None = None) -> str:
-        """Thêm sự kiện vào hàng đợi offline với idempotency_key duy nhất."""
+    def add_event(
+        self,
+        type: str | None = None,
+        subject: str | None = None,
+        duration_sec: int = 0,
+        policy_version: int | None = None,
+        **legacy: object,
+    ) -> str:
+        """Add one validated Event Item to the offline queue."""
+        event_type = type or legacy.pop("event_type", None)
+        if legacy:
+            raise TypeError(f"Unexpected event fields: {', '.join(sorted(legacy))}")
+        if event_type not in EVENT_TYPES:
+            raise ValueError(f"Unsupported event type: {event_type!r}")
+        normalized_subject = normalize_event_subject(event_type, subject)
+        if event_type in SUBJECT_EVENT_TYPES and not normalized_subject:
+            raise ValueError(f"subject is required for event type {event_type!r}")
+        if duration_sec < 0:
+            raise ValueError("duration_sec must be non-negative")
         idempotency_key = f"ev_{uuid.uuid4().hex}"
         now_str = self.get_server_utc_datetime().strftime("%Y-%m-%dT%H:%M:%SZ")
         with self._get_connection() as conn:
@@ -179,7 +207,7 @@ class AgentStorage:
                 INSERT INTO event_queue (idempotency_key, event_type, subject, duration_sec, policy_version, created_at, sent)
                 VALUES (?, ?, ?, ?, ?, ?, 0)
                 """,
-                (idempotency_key, event_type, subject, duration_sec, policy_version, now_str),
+                (idempotency_key, event_type, normalized_subject, duration_sec, policy_version, now_str),
             )
             conn.commit()
         return idempotency_key
@@ -194,7 +222,7 @@ class AgentStorage:
                 {
                     "id": r["id"],
                     "idempotency_key": r["idempotency_key"],
-                    "event_type": r["event_type"],
+                    "type": r["event_type"],
                     "subject": r["subject"],
                     "duration_sec": r["duration_sec"],
                     "policy_version": r["policy_version"],

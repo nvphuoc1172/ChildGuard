@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app import models, security
 from app.database import get_db
 from app.deps import get_optional_parent
+from app.domain_categories import CATEGORY_DEFINITIONS
 from app.routers.commands import manager
 from app.routers.reports import (
     cleanup_old_logs,
@@ -1005,12 +1006,10 @@ def reports_page(
         return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_302_FOUND)
 
     children = db.query(models.Child).filter(models.Child.parent_id == parent.id).all()
-    if not children:
-        children = db.query(models.Child).all()
 
     selected_child = None
     if child_id:
-        selected_child = db.get(models.Child, child_id)
+        selected_child = next((child for child in children if child.id == child_id), None)
     if not selected_child and children:
         selected_child = children[0]
 
@@ -1025,8 +1024,14 @@ def reports_page(
             "hourly_list": [],
             "daily_list": [],
             "top_blocked_apps": [],
-            "top_blocked_webs": [],
+            "top_blocked_domains": [],
             "recent_events": [],
+            "website_category_usage": [
+                {**category, "total_minutes": 0, "daily": [], "domains": []}
+                for category in CATEGORY_DEFINITIONS
+            ],
+            "website_category_days": [],
+            "report_timezone": "GMT+7 (Asia/Ho_Chi_Minh)",
             "time_blocks": {"morning_minutes": 0, "afternoon_minutes": 0, "evening_minutes": 0, "night_minutes": 0},
         }
 
@@ -1049,6 +1054,31 @@ def reports_page(
     )
 
 
+@router.get("/dashboard/reports/recent-events", response_class=HTMLResponse)
+def reports_recent_events(
+    request: Request,
+    child_id: str,
+    db: Session = Depends(get_db),
+    parent: models.Parent | None = Depends(get_optional_parent),
+):
+    """HTMX fragment that refreshes only the most recent event table."""
+    if not parent:
+        raise HTTPException(status_code=401, detail="authentication_required")
+    child = (
+        db.query(models.Child)
+        .filter(models.Child.id == child_id, models.Child.parent_id == parent.id)
+        .first()
+    )
+    if child is None:
+        raise HTTPException(status_code=404, detail="child_not_found")
+    stats = get_child_stats_summary(child.id, db)
+    return templates.TemplateResponse(
+        request=request,
+        name="partials/recent_events.html",
+        context={"recent_events": stats["recent_events"], "report_timezone": stats["report_timezone"]},
+    )
+
+
 @router.get("/dashboard/reports/export-pdf")
 def export_reports_pdf(
     child_id: str | None = None,
@@ -1061,14 +1091,15 @@ def export_reports_pdf(
 
     selected_child = None
     if child_id:
-        selected_child = db.get(models.Child, child_id)
+        selected_child = (
+            db.query(models.Child)
+            .filter(models.Child.id == child_id, models.Child.parent_id == parent.id)
+            .first()
+        )
     if not selected_child:
         selected_child = (
             db.query(models.Child).filter(models.Child.parent_id == parent.id).first()
         )
-    if not selected_child:
-        selected_child = db.query(models.Child).first()
-
     if not selected_child:
         raise HTTPException(status_code=404, detail="child_not_found")
 
@@ -1266,6 +1297,19 @@ def child_request_time_action(
         created_at=now,
     )
     db.add(req)
+    db.flush()
+    if device:
+        db.add(
+            models.EventLog(
+                idempotency_key=f"request_{req.id}",
+                device_id=device.id,
+                child_id=child.id,
+                event_type="unlock_request",
+                subject=None,
+                duration_sec=0,
+                created_at=now,
+            )
+        )
     db.commit()
 
     return RedirectResponse(
