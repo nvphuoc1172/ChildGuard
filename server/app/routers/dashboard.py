@@ -790,8 +790,9 @@ def policy_page(
             lines.append(str(item))
     blocked_apps_text = "\n".join(lines)
 
-    domain_rules = json.loads(latest_policy.domain_rules_json) if latest_policy else {"blacklist": []}
+    domain_rules = json.loads(latest_policy.domain_rules_json) if latest_policy else {"blacklist": [], "safesearch": True}
     blocked_domains_list = domain_rules.get("blacklist", []) if isinstance(domain_rules, dict) else (domain_rules if isinstance(domain_rules, list) else [])
+    safesearch_enabled = domain_rules.get("safesearch", True) if isinstance(domain_rules, dict) else True
 
     return templates.TemplateResponse(
         request=request,
@@ -808,6 +809,7 @@ def policy_page(
             "app_mode": app_mode,
             "blocked_apps_text": blocked_apps_text,
             "blocked_domains_text": "\n".join(blocked_domains_list),
+            "safesearch_enabled": safesearch_enabled,
             "success_msg": None,
         },
     )
@@ -824,6 +826,7 @@ def save_policy_page(
     app_mode: str = Form("blacklist"),
     blocked_apps: str = Form(""),
     blocked_domains: str = Form(""),
+    safesearch: str = Form("off"),
     db: Session = Depends(get_db),
     parent: models.Parent | None = Depends(get_optional_parent),
 ):
@@ -898,13 +901,20 @@ def save_policy_page(
     else:
         app_rules_data = {"mode": "blacklist", "blacklist": app_list, "whitelist": []}
 
+    safesearch_enabled = safesearch in ("on", "true", "1")
+    domain_rules_data = {
+        "mode": "blacklist",
+        "blacklist": domain_list,
+        "safesearch": safesearch_enabled,
+    }
+
     new_policy = models.Policy(
         child_id=child_id,
         version=new_version,
         quota_json=json.dumps({"daily_minutes": daily_minutes}),
         schedule_json=json.dumps(schedule_data),
         app_rules_json=json.dumps(app_rules_data),
-        domain_rules_json=json.dumps({"mode": "blacklist", "blacklist": domain_list}),
+        domain_rules_json=json.dumps(domain_rules_data),
         created_at=now,
     )
     db.add(new_policy)
@@ -920,6 +930,7 @@ def save_policy_page(
             "daily_minutes": daily_minutes,
             "app_mode": app_mode_clean,
             "app_count": len(app_list),
+            "safesearch": safesearch_enabled,
         }),
         created_at=now,
     )
@@ -942,6 +953,7 @@ def save_policy_page(
             "app_mode": app_mode_clean,
             "blocked_apps_text": "\n".join(app_list),
             "blocked_domains_text": "\n".join(domain_list),
+            "safesearch_enabled": safesearch_enabled,
             "success_msg": f"Đã lưu chính sách phiên bản v{new_version} thành công! Máy trẻ em sẽ tự cập nhật khi nhịp tim hoặc nhận lệnh.",
         },
     )

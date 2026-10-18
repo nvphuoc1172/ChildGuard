@@ -117,11 +117,33 @@
 
     <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">
 
-    <h3 style="margin-bottom: 16px; font-size: 16px; color: var(--text-main);">3. Lọc Tên miền Website (DNS Filtering 127.0.0.1:53)</h3>
+    <h3 style="margin-bottom: 16px; font-size: 16px; color: var(--text-main);">3. Lọc Tên miền Website & Tìm kiếm An toàn (DNS Filtering 127.0.0.1:53)</h3>
+    
+    <!-- Cưỡng chế SafeSearch F2 -->
+    <div style="margin-bottom: 16px; background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: var(--radius-sm); padding: 14px 16px;">
+      <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; color: var(--text-main); font-weight: 600;">
+        <input type="checkbox" name="safesearch" value="on" {% if safesearch_enabled %}checked{% endif %}>
+        <span>🛡️ Cưỡng chế Tìm kiếm An toàn (SafeSearch & YouTube Restricted Mode)</span>
+      </label>
+      <div style="font-size: 13px; color: var(--text-muted); margin-top: 6px; line-height: 1.5;">
+        Tự động viết lại bản ghi DNS và file Hosts để ép buộc chế độ lọc nghiêm ngặt (Strict Filtering) trên <strong>Google Search</strong> (<code>forcesafesearch.google.com</code>), <strong>Microsoft Bing</strong> (<code>strict.bing.com</code>) và <strong>YouTube</strong> (<code>restrict.youtube.com</code>). Ngăn chặn triệt để hình ảnh, video và kết quả tìm kiếm độc hại mà trẻ không thể tắt trên trình duyệt.
+      </div>
+    </div>
+
     <div class="form-group">
       <label class="form-label">Danh sách tên miền website bị chặn (Domain Blacklist)</label>
       <textarea name="blocked_domains" class="form-textarea" rows="4" placeholder="vd: facebook.com&#10;tiktok.com&#10;youtube.com&#10;badsite.com">{{ blocked_domains_text }}</textarea>
-      <div class="form-help">Mỗi tên miền trên một dòng. DNS Proxy nội bộ sẽ phân giải về 0.0.0.0 để chặn trẻ truy cập các trang này.</div>
+      <div class="form-help">Mỗi tên miền trên một dòng. DNS Proxy nội bộ sẽ phân giải về 0.0.0.0 và đồng bộ vào file Windows Hosts để chặn triệt để.</div>
+    </div>
+
+    <!-- Danh sách Miễn chặn Vĩnh viễn (Nguyên tắc NT6) -->
+    <div style="margin-top: 12px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-sm); padding: 12px 16px;">
+      <div style="font-weight: 600; color: #10b981; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+        <span>🏛️</span> Danh sách Miễn chặn Vĩnh viễn (Nguyên tắc NT6 - Quyền được trợ giúp & giáo dục)
+      </div>
+      <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.5;">
+        Hệ thống luôn mở quyền truy cập tới <strong>Tổng đài Quốc gia Bảo vệ Trẻ em 111</strong> (<code>tongdai111.vn</code>, <code>111.vn</code>, <code>treem.gov.vn</code>), <strong>Cổng thông tin Chính phủ / Cứu hộ khẩn cấp</strong> (113, 114, 115) và <strong>Cổng thông tin giáo dục / trường học</strong> (<code>*.edu.vn</code>, <code>*.gov.vn</code>). Các tên miền này sẽ không bao giờ bị chặn kể cả khi lỡ nhập vào danh sách đen.
+      </div>
     </div>
 
     <div style="margin-top: 28px;">

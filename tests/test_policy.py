@@ -69,3 +69,34 @@ def test_get_child_policy(client, db_session):
     assert res.status_code == 200
     assert res.json()["version"] == 3
     assert res.json()["app_rules"]["blacklist"] == ["roblox.exe"]
+
+
+def test_policy_with_safesearch_and_bypass_in_domain_rules(client, db_session):
+    parent = models.Parent(email="p_safe@test.local", password_hash="dummy")
+    db_session.add(parent)
+    db_session.flush()
+
+    child = models.Child(parent_id=parent.id, display_name="Bé An")
+    db_session.add(child)
+    db_session.flush()
+
+    res = client.post(
+        "/policy",
+        json={
+            "child_id": child.id,
+            "quota": {"daily_minutes": 120},
+            "schedule": {},
+            "app_rules": {"blacklist": []},
+            "domain_rules": {"blacklist": ["facebook.com"], "safesearch": True},
+        },
+    )
+    assert res.status_code == 201
+    data = res.json()
+    assert data["domain_rules"]["safesearch"] is True
+    assert data["domain_rules"]["blacklist"] == ["facebook.com"]
+
+    # Kiểm tra lưu vào cơ sở dữ liệu
+    pol = db_session.query(models.Policy).filter(models.Policy.child_id == child.id).first()
+    dr = json.loads(pol.domain_rules_json)
+    assert dr.get("safesearch") is True
+
