@@ -37,7 +37,7 @@ except ImportError:
 # Bộ đệm hash tệp thực thi theo (đường dẫn, mtime, size) để tránh đọc lại đĩa mỗi 2 giây
 _FILE_HASH_CACHE: dict[str, tuple[float, int, str]] = {}
 
-# Các tiến trình hệ thống thiết yếu tuyệt đối không bao giờ được terminate (kể cả trong chế độ Whitelist)
+# Các tiến trình hệ thống thiết yếu tuyệt đối không bao giờ bị terminate.
 ESSENTIAL_SYSTEM_PROCESSES = {
     # Windows core & system processes
     "system", "system idle process", "registry", "smss.exe", "csrss.exe",
@@ -218,12 +218,12 @@ def check_process_rule(
     app_rules: dict | list,
     known_system_hashes: dict[str, str] | None = None,
 ) -> tuple[bool, str, str]:
-    """Kiểm tra một tiến trình xem có bị chặn hay được phép theo chính sách.
+    """Kiểm tra một tiến trình theo danh sách đen ứng dụng.
 
     Quy tắc đối chiếu danh tính (Identity Resolution):
     - Dựa vào mã băm SHA-256 của tệp thực thi để nhận diện đúng bản chất ứng dụng.
     - Ví dụ: Trẻ đổi tên notepad.exe thành game.exe:
-      Do SHA-256 trùng khớp với mã băm của notepad.exe (trong known_system_hashes hoặc whitelist),
+      Do SHA-256 trùng khớp với mã băm của notepad.exe trong known_system_hashes,
       hệ thống nhận diện đúng ứng dụng là notepad.exe, KHÔNG chặn nhầm dù tên tiến trình là game.exe.
     - Ngược lại: Trẻ đổi tên game.exe thành notepad.exe:
       Mã băm SHA-256 không trùng khớp với notepad.exe chuẩn (hoặc trùng với mã băm game bị cấm),
@@ -248,22 +248,16 @@ def check_process_rule(
 
     raw_list = []
     if isinstance(app_rules, list):
-        mode = "blacklist"
         raw_list = app_rules
     elif isinstance(app_rules, dict):
-        mode = app_rules.get("mode", "blacklist").lower()
-        if mode == "whitelist":
-            raw_list = app_rules.get("whitelist", [])
-        else:
-            raw_list = app_rules.get("blacklist", [])
-    else:
-        mode = "blacklist"
+        # Chỉ danh sách chặn có hiệu lực. Các trường cũ khác bị bỏ qua để
+        # không vô tình biến ứng dụng được phép thành ứng dụng bị chặn.
+        raw_list = app_rules.get("blacklist", [])
 
     # Đăng ký các hash đã biết từ app_rules vào bảng danh tính
     all_rule_entries = []
     if isinstance(app_rules, dict):
         all_rule_entries.extend(app_rules.get("blacklist", []))
-        all_rule_entries.extend(app_rules.get("whitelist", []))
     else:
         all_rule_entries.extend(raw_list)
 
@@ -282,87 +276,37 @@ def check_process_rule(
     if h_proc and h_proc in hash_to_identity:
         identified_app = hash_to_identity[h_proc]
 
-    # 4. Kiểm tra theo chế độ (Whitelist vs Blacklist)
-    if mode == "whitelist":
-        if not parsed_rules:
-            # Danh sách cho phép trống -> Mặc định không cấm (tránh khóa toàn bộ hệ thống khi chưa cài đặt)
-            return False, "Danh sách cho phép trống", identified_app
+    # 4. Chế độ duy nhất: chặn các ứng dụng trong blacklist.
+    for r in parsed_rules:
+        r_name = r.get("name")
+        r_hash = r.get("sha256")
 
-        is_whitelisted = False
-        match_reason = ""
+        # TH 1: Rule chỉ định mã hash
+        if r_hash:
+            if h_proc and h_proc == r_hash:
+                lbl = f" {r_name}" if r_name else ""
+                return True, f"Khớp mã SHA-256 bị cấm{lbl} ({r_hash[:12]}...)", identified_app
 
-        for r in parsed_rules:
-            r_name = r.get("name")
-            r_hash = r.get("sha256")
+        # TH 2: Rule chỉ định tên ứng dụng
+        if r_name:
+            r_name_no_exe = r_name.removesuffix(".exe")
+            # ĐẶC BIỆT XỬ LÝ ĐỔI TÊN:
+            # Nếu tiến trình bị đổi tên từ notepad.exe thành game.exe (pname là game.exe),
+            # nhưng danh tính thực sự identified_app là notepad.exe (do hash trùng notepad.exe):
+            # -> KHÔNG CHẶN vì đây thực chất là notepad.exe!
+            if pname == r_name or pname_no_exe == r_name_no_exe:
+                if identified_app != pname and identified_app != r_name and (identified_app.removesuffix(".exe") != r_name_no_exe):
+                    continue
+                if r_hash and h_proc and h_proc != r_hash:
+                    continue
+                return True, f"Nằm trong danh sách cấm ({r_name})", identified_app
 
-            # Nếu rule có cả sha256 và name
-            if r_name and r_hash:
-                if h_proc and h_proc == r_hash:
-                    is_whitelisted = True
-                    match_reason = f"Khớp mã SHA-256 ứng dụng cho phép {r_name}"
-                    break
-            # Nếu rule chỉ có sha256
-            elif r_hash and not r_name:
-                if h_proc and h_proc == r_hash:
-                    is_whitelisted = True
-                    match_reason = "Khớp mã SHA-256 được cấp phép"
-                    break
-            # Nếu rule chỉ có tên ứng dụng
-            elif r_name and not r_hash:
-                r_name_no_exe = r_name.removesuffix(".exe")
-                # Khớp theo danh tính thực tế (identified_app) hoặc tên tiến trình
-                if identified_app == r_name or identified_app.removesuffix(".exe") == r_name_no_exe:
-                    # Kiểm tra xem có bị giả mạo tên không:
-                    expected_hash = known_system_hashes.get(r_name) if known_system_hashes else None
-                    if expected_hash and h_proc and h_proc != expected_hash:
-                        continue  # Giả mạo tên ứng dụng cho phép nhưng hash khác
-                    is_whitelisted = True
-                    match_reason = f"Thuộc danh sách cho phép ({r_name})"
-                    break
-                elif pname == r_name or pname_no_exe == r_name_no_exe:
-                    expected_hash = known_system_hashes.get(r_name) if known_system_hashes else None
-                    if expected_hash and h_proc and h_proc != expected_hash:
-                        continue
-                    is_whitelisted = True
-                    match_reason = f"Thuộc danh sách cho phép ({r_name})"
-                    break
+            # Nếu tên tiến trình không khớp (ví dụ: game.exe đổi tên thành notepad.exe),
+            # nhưng danh tính thực tế identified_app là r_name (do hash trùng game.exe bị cấm):
+            if identified_app == r_name or identified_app.removesuffix(".exe") == r_name_no_exe:
+                return True, f"Phát hiện ứng dụng bị cấm {r_name} giả mạo dưới tên {pname}", identified_app
 
-        if not is_whitelisted:
-            return True, f"Ứng dụng {pname} (nhận diện: {identified_app}) không nằm trong danh sách cho phép (Whitelist)", identified_app
-        return False, match_reason, identified_app
-
-    else:
-        # CHẾ ĐỘ BLACKLIST: Chặn các ứng dụng trong blacklist
-        for r in parsed_rules:
-            r_name = r.get("name")
-            r_hash = r.get("sha256")
-
-            # TH 1: Rule chỉ định mã hash
-            if r_hash:
-                if h_proc and h_proc == r_hash:
-                    lbl = f" {r_name}" if r_name else ""
-                    return True, f"Khớp mã SHA-256 bị cấm{lbl} ({r_hash[:12]}...)", identified_app
-
-            # TH 2: Rule chỉ định tên ứng dụng
-            if r_name:
-                r_name_no_exe = r_name.removesuffix(".exe")
-                # ĐẶC BIỆT XỬ LÝ ĐỔI TÊN:
-                # Nếu tiến trình bị đổi tên từ notepad.exe thành game.exe (pname là game.exe),
-                # nhưng danh tính thực sự identified_app là notepad.exe (do hash trùng notepad.exe):
-                # -> KHÔNG CHẶN vì đây thực chất là notepad.exe!
-                if pname == r_name or pname_no_exe == r_name_no_exe:
-                    if identified_app != pname and identified_app != r_name and (identified_app.removesuffix(".exe") != r_name_no_exe):
-                        continue
-                    if r_hash and h_proc and h_proc != r_hash:
-                        continue
-                    return True, f"Nằm trong danh sách cấm ({r_name})", identified_app
-
-                # Nếu tên tiến trình không khớp (ví dụ: game.exe đổi tên thành notepad.exe),
-                # nhưng danh tính thực tế identified_app là r_name (do hash trùng game.exe bị cấm):
-                if identified_app == r_name or identified_app.removesuffix(".exe") == r_name_no_exe:
-                    return True, f"Phát hiện ứng dụng bị cấm {r_name} giả mạo dưới tên {pname}", identified_app
-
-        return False, "Ứng dụng hợp lệ", identified_app
+    return False, "Ứng dụng hợp lệ", identified_app
 
 
 class LASTINPUTINFO(ctypes.Structure):
@@ -544,9 +488,7 @@ class PolicyEnforcer:
         self._last_app_block_notif[app_name] = now
 
         msg = f"Ứng dụng '{app_name}' đã bị đóng vì nằm trong danh sách hạn chế theo quy định của cha mẹ."
-        if reason and "whitelist" in reason.lower():
-            msg = f"Ứng dụng '{app_name}' đã bị đóng vì không thuộc danh sách cho phép (Whitelist) của cha mẹ."
-        elif reason and "sha-256" in reason.lower():
+        if reason and "sha-256" in reason.lower():
             msg = f"Ứng dụng '{app_name}' đã bị đóng vì nhận diện tệp thực thi bị cấm (khớp mã băm SHA-256)."
 
         self._emit_event_notification(
@@ -889,18 +831,17 @@ class PolicyEnforcer:
                 )
 
     def scan_and_enforce_processes(self, policy: dict):
-        """Quét tiến trình đang chạy và thực thi chính sách cho phép / chặn ứng dụng kèm đối chiếu SHA-256."""
+        """Quét tiến trình và thực thi blacklist ứng dụng kèm đối chiếu SHA-256."""
         if psutil is None:
             return
 
         app_rules = policy.get("app_rules", {})
-        rule_mode = app_rules.get("mode", "blacklist") if isinstance(app_rules, dict) else "blacklist"
         rule_entries = []
         if isinstance(app_rules, dict):
-            rule_entries = app_rules.get("whitelist" if rule_mode == "whitelist" else "blacklist", []) or []
+            rule_entries = app_rules.get("blacklist", []) or []
         elif isinstance(app_rules, list):
             rule_entries = app_rules
-        has_app_restrictions = rule_mode == "whitelist" or bool(rule_entries)
+        has_app_restrictions = bool(rule_entries)
 
         observed_now: dict[int, tuple[str, float]] = {}
         now_mono = time.monotonic()

@@ -207,6 +207,27 @@ class TrayApp:
             tk.Label(blocks_sub, textvariable=afternoon_var, font=("Segoe UI", 9), fg="#cbd5e1", bg="#1e293b").pack(side="left", expand=True)
             tk.Label(blocks_sub, textvariable=evening_var, font=("Segoe UI", 9), fg="#cbd5e1", bg="#1e293b").pack(side="left", expand=True)
 
+            # --- Restricted applications ---
+            restricted_frame = tk.Frame(scrollable_frame, bg="#1e293b", padx=14, pady=10, relief="groove", bd=1)
+            restricted_frame.pack(fill="x", padx=12, pady=6)
+            tk.Label(
+                restricted_frame,
+                text="🚫 Ứng dụng bị hạn chế",
+                font=("Segoe UI", 10, "bold"),
+                fg="#f8fafc",
+                bg="#1e293b",
+            ).pack(anchor="w", pady=(0, 4))
+            restricted_apps_var = tk.StringVar(value="Đang cập nhật...")
+            tk.Label(
+                restricted_frame,
+                textvariable=restricted_apps_var,
+                font=("Segoe UI", 9),
+                fg="#fca5a5",
+                bg="#1e293b",
+                justify="left",
+                wraplength=500,
+            ).pack(anchor="w")
+
             # --- Good Habits / Tips Frame ---
             tips_frame = tk.Frame(scrollable_frame, bg="#1e293b", padx=14, pady=10, relief="groove", bd=1)
             tips_frame.pack(fill="x", padx=12, pady=6)
@@ -376,6 +397,12 @@ class TrayApp:
                 else:
                     block_num_var.set("Đang bật")
 
+                restricted_apps = st.get("restricted_apps", [])
+                if restricted_apps:
+                    restricted_apps_var.set(", ".join(str(name) for name in restricted_apps))
+                else:
+                    restricted_apps_var.set("Hiện không có ứng dụng nào trong danh sách hạn chế.")
+
                 root.after(2000, _update_kid_info)
 
             _update_kid_info()
@@ -453,9 +480,6 @@ class TrayApp:
                 if isinstance(ar, list):
                     app_items = ar
                     app_label = "🚫 Ứng dụng bị cấm (Blacklist):"
-                elif isinstance(ar, dict) and ar.get("mode") == "whitelist":
-                    app_items = ar.get("whitelist", [])
-                    app_label = "✅ Chỉ cho phép (Whitelist):"
                 elif isinstance(ar, dict):
                     app_items = ar.get("blacklist", [])
                     app_label = "🚫 Ứng dụng bị cấm (Blacklist):"

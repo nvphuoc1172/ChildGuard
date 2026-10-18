@@ -44,6 +44,21 @@ class IPCHandler(BaseHTTPRequestHandler):
             effective_rem_sec = getattr(self.enforcer, "effective_remaining_seconds", 0) if self.enforcer else 0
             effective_res_type = getattr(self.enforcer, "effective_restriction_type", "none") if self.enforcer else "none"
 
+            app_rules = policy.get("app_rules", {})
+            raw_restricted_apps = (
+                app_rules.get("blacklist", [])
+                if isinstance(app_rules, dict)
+                else app_rules if isinstance(app_rules, list) else []
+            )
+            restricted_apps = []
+            for item in raw_restricted_apps:
+                if isinstance(item, dict):
+                    display_name = item.get("name") or item.get("sha256")
+                else:
+                    display_name = str(item)
+                if display_name and display_name not in restricted_apps:
+                    restricted_apps.append(display_name)
+
             from datetime import datetime
             cur_h = datetime.now().hour
             morning_m = 0.0
@@ -73,6 +88,10 @@ class IPCHandler(BaseHTTPRequestHandler):
                 "active_notification": active_notification,
                 "effective_remaining_seconds": effective_rem_sec,
                 "effective_restriction_type": effective_res_type,
+                "restricted_apps": restricted_apps,
+                "pending_event_count": len(self.storage.get_pending_events()),
+                "last_event_sync_at": getattr(self.sync_worker, "last_event_sync_at", None),
+                "last_event_sync_error": getattr(self.sync_worker, "last_event_sync_error", None),
                 "policy": policy,
                 "time_blocks": {
                     "morning_minutes": morning_m,

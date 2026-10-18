@@ -24,6 +24,7 @@ from pathlib import Path
 from dns_proxy import DNSProxyServer, HostsBlocker
 from enforcer import PolicyEnforcer
 from ipc import IPCServer
+from logging_utils import configure_agent_console
 from storage import AgentStorage
 from sync import SyncWorker
 from enroll import call_enroll, compute_fingerprint, save_state
@@ -101,6 +102,7 @@ def enroll_from_console(state_path: Path, server: str, port: int, ca_cert: str, 
 
 
 def main():
+    configure_agent_console()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", default="agent_state/device_token.json", help="Đường dẫn file token ghép đôi")
     parser.add_argument("--ca-cert", default="certs/ogk-ca.crt", help="Đường dẫn chứng chỉ CA nội bộ")

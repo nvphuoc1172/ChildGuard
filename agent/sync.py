@@ -12,7 +12,6 @@ import asyncio
 import json
 import ssl
 import threading
-import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -22,6 +21,8 @@ import websockets
 
 from enforcer import PolicyEnforcer
 from storage import AgentStorage
+
+EVENT_FLUSH_INTERVAL_SECONDS = 5
 
 
 class SyncWorker:
@@ -45,6 +46,10 @@ class SyncWorker:
         self.state_path = Path(state_config.get("_state_path", Path(__file__).resolve().parent / "agent_state" / "device_token.json"))
         self._token_lock = threading.RLock()
         self._refresh_lock = threading.Lock()
+        self._event_flush_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self.last_event_sync_at: str | None = None
+        self.last_event_sync_error: str | None = None
         self.ca_cert_path = ca_cert_path
         self.use_http = state_config.get("use_http", False)
         self.running = False
@@ -106,9 +111,14 @@ class SyncWorker:
             self.dns_proxy.sync_policy_rules(policy_data)
 
     def flush_events_batch(self):
+        with self._event_flush_lock:
+            return self._flush_events_batch_locked()
+
+    def _flush_events_batch_locked(self):
         events = self.storage.get_pending_events(limit=100)
         if not events:
-            return
+            self.last_event_sync_error = None
+            return 0
 
         payload_events = [
             {
@@ -126,9 +136,21 @@ class SyncWorker:
             res = self._http_request("/events/batch", method="POST", body={"events": payload_events})
             event_ids = [ev["id"] for ev in events]
             self.storage.mark_events_sent(event_ids)
+            self.last_event_sync_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            self.last_event_sync_error = None
             print(f"[Sync] Đã gửi {res.get('processed')} sự kiện lên server (bỏ qua {res.get('ignored')} trùng).")
+            return len(event_ids)
         except Exception as e:
+            self.last_event_sync_error = str(e)
             print(f"[Sync] Chưa gửi được batch events: {e}")
+            return 0
+
+    def run_event_flush_loop(self, interval: int = EVENT_FLUSH_INTERVAL_SECONDS):
+        """Upload events independently so heartbeat/policy errors cannot stall logs."""
+        print(f"[Sync Events] Bắt đầu đồng bộ event độc lập mỗi {interval}s.")
+        while self.running:
+            self.flush_events_batch()
+            self._stop_event.wait(interval)
 
     def execute_command(self, cmd_id: str, cmd_type: str, payload: dict):
         print(f"[Sync] ⚡ THỰC THI LỆNH KHẨN: {cmd_type} (id={cmd_id}, payload={payload})")
@@ -247,7 +269,8 @@ class SyncWorker:
                             print(f"[Sync WS] Lỗi xử lý message: {e}")
             except Exception as e:
                 print(f"[Sync WS] Mất kết nối WebSocket ({e}). Thử lại sau 5s...")
-                self._refresh_access_token()
+                if self._access_token_needs_refresh():
+                    self._refresh_access_token()
                 await asyncio.sleep(5)
 
     def _run_ws_thread(self):
@@ -255,8 +278,13 @@ class SyncWorker:
 
     def run_heartbeat_loop(self, interval: int = 30):
         self.running = True
-        # Làm mới ngay khi Windows vừa khởi động lại; refresh token tồn tại 30 ngày.
-        self._refresh_access_token()
+        self._stop_event.clear()
+        # Chỉ làm mới nếu access token thực sự gần hết hạn.
+        if self._access_token_needs_refresh():
+            self._refresh_access_token()
+
+        event_thread = threading.Thread(target=self.run_event_flush_loop, daemon=True)
+        event_thread.start()
         # Luôn đồng bộ chính sách mới nhất ngay khi Agent khởi chạy
         try:
             self.fetch_and_apply_policy()
@@ -282,13 +310,11 @@ class SyncWorker:
                 for cmd in res.get("pending_commands", []):
                     self.execute_command(cmd["command_id"], cmd["type"], cmd.get("payload", {}))
 
-                # 4. Đẩy batch events
-                self.flush_events_batch()
-
             except Exception as e:
                 print(f"[Sync] Không kết nối được tới server trong lần heartbeat: {e}")
 
-            time.sleep(interval)
+            self._stop_event.wait(interval)
 
     def stop(self):
         self.running = False
+        self._stop_event.set()
