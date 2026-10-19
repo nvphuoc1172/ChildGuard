@@ -9,6 +9,8 @@ Chạy trong phiên người dùng (user session):
 from __future__ import annotations
 
 import json
+import ctypes
+import sys
 import threading
 import time
 import urllib.request
@@ -34,6 +36,29 @@ class TrayApp:
         self.icon = None
         self.status = {}
         self.running = True
+        self._instance_mutex = None
+        self._window_lock = threading.Lock()
+        self._open_windows: set[str] = set()
+
+    def _reserve_window(self, name: str) -> bool:
+        with self._window_lock:
+            if name in self._open_windows:
+                return False
+            self._open_windows.add(name)
+            return True
+
+    def _release_window(self, name: str) -> None:
+        with self._window_lock:
+            self._open_windows.discard(name)
+
+    def _acquire_single_instance(self) -> bool:
+        """Ngăn chạy hai TrayUI/Tk event loop trong cùng Windows session."""
+        if sys.platform != "win32":
+            return True
+        self._instance_mutex = ctypes.windll.kernel32.CreateMutexW(
+            None, False, "Local\\ChildGuardTrayUI"
+        )
+        return ctypes.windll.kernel32.GetLastError() != 183
 
     def fetch_status(self) -> dict:
         try:
@@ -69,6 +94,8 @@ class TrayApp:
     def show_child_today_window(self):
         """Màn hình 'Góc của bé (Hôm nay em đã dùng gì)' với giao diện sinh động, lời khuyên và xin thêm giờ."""
         if not tk:
+            return
+        if not self._reserve_window("child_today"):
             return
 
         def _open():
@@ -450,12 +477,15 @@ class TrayApp:
 
             _update_kid_info()
             root.mainloop()
+            self._release_window("child_today")
 
         threading.Thread(target=_open, daemon=True).start()
 
     def show_transparency_window(self):
         """Màn hình minh bạch: cho trẻ xem toàn bộ chính sách và đếm thời gian thực."""
         if not tk:
+            return
+        if not self._reserve_window("transparency"):
             return
 
         def _open():
@@ -567,12 +597,15 @@ class TrayApp:
             )
             btn_close.pack(pady=8)
             root.mainloop()
+            self._release_window("transparency")
 
         threading.Thread(target=_open, daemon=True).start()
 
     def show_request_window(self):
         """Cửa sổ xin thêm giờ sử dụng."""
         if not tk:
+            return
+        if not self._reserve_window("request"):
             return
 
         def _open():
@@ -671,6 +704,7 @@ class TrayApp:
             ).pack(pady=18)
 
             root.mainloop()
+            self._release_window("request")
 
         threading.Thread(target=_open, daemon=True).start()
 
@@ -721,6 +755,9 @@ class TrayApp:
         threading.Thread(target=_popup, daemon=True).start()
 
     def run(self):
+        if not self._acquire_single_instance():
+            print("[Tray] TrayUI đã chạy; bỏ qua lần mở trùng.")
+            return
         if not pystray:
             print("[Tray] Thư viện pystray chưa được cài đặt. Tray UI chạy ở chế độ fallback.")
             while self.running:
@@ -808,6 +845,9 @@ class TrayApp:
         self.running = False
         if self.icon:
             self.icon.stop()
+        if self._instance_mutex and sys.platform == "win32":
+            ctypes.windll.kernel32.CloseHandle(self._instance_mutex)
+            self._instance_mutex = None
 
 
 def main():

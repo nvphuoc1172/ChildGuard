@@ -121,6 +121,23 @@ def test_heartbeat_success_updates_last_seen_at(client, db_session):
     assert device.last_seen_at >= old_last_seen
 
 
+def test_heartbeat_persists_authoritative_screen_time_without_double_counting(client, db_session):
+    device_id, access_token, policy_version, _ = _enroll_device(client, db_session)
+    body = {"policy_version": policy_version, "quota_used_seconds": 600, "queued_event_count": 0}
+    first = client.post("/heartbeat", json=body, headers=_auth_headers(access_token))
+    second = client.post("/heartbeat", json=body, headers=_auth_headers(access_token))
+    assert first.status_code == second.status_code == 200
+
+    db_session.expire_all()
+    device = db_session.get(models.Device, device_id)
+    assert device.quota_used_seconds == 600
+    deltas = db_session.query(models.EventLog).filter(
+        models.EventLog.device_id == device_id,
+        models.EventLog.event_type == "screen_time",
+    ).all()
+    assert sum(event.duration_sec for event in deltas) == 600
+
+
 def test_heartbeat_policy_changed_false_when_version_matches(client, db_session):
     _, access_token, policy_version, _ = _enroll_device(client, db_session)
 

@@ -70,6 +70,10 @@ def auto_migrate(db_engine=engine):
         if dev_cols:
             if "device_name" not in dev_cols:
                 conn.exec_driver_sql("ALTER TABLE devices ADD COLUMN device_name VARCHAR(100) DEFAULT 'Máy tính của trẻ'")
+            if "quota_used_seconds" not in dev_cols:
+                conn.exec_driver_sql("ALTER TABLE devices ADD COLUMN quota_used_seconds INTEGER DEFAULT 0 NOT NULL")
+            if "quota_date" not in dev_cols:
+                conn.exec_driver_sql("ALTER TABLE devices ADD COLUMN quota_date VARCHAR(10)")
 
         # Event Item v2 value migration. Historical screen_time rows remain
         # readable by reports, but the ingestion API no longer accepts them.

@@ -14,6 +14,7 @@ import json
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -377,19 +378,9 @@ def dashboard_overview(
         quota_data = json.loads(latest_policy.quota_json) if latest_policy else {"daily_minutes": 120}
         daily_quota = quota_data.get("daily_minutes", 120)
 
-        # Tính thời gian sử dụng hôm nay từ EventLog
-        used_seconds = 0
-        events_today = (
-            db.query(models.EventLog)
-            .filter(
-                models.EventLog.device_id == d.id,
-                models.EventLog.event_type == "screen_time",
-                models.EventLog.created_at >= today_start,
-            )
-            .all()
-        )
-        for ev in events_today:
-            used_seconds += ev.duration_sec
+        # Dùng cùng snapshot authoritative với TrayUI.
+        local_date = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date().isoformat()
+        used_seconds = d.quota_used_seconds if d.quota_date == local_date else 0
 
         used_minutes = round(used_seconds / 60, 1)
         percent = min(100, round((used_minutes / max(daily_quota, 1)) * 100)) if daily_quota > 0 else 0

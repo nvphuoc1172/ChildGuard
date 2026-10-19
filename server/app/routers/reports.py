@@ -323,6 +323,7 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
     night_sec = 0       # 22:00 - 06:00
 
     category_day_seconds: dict[str, Counter] = defaultdict(Counter)
+    category_day_queries: dict[str, Counter] = defaultdict(Counter)
     category_domain_seconds: dict[str, Counter] = defaultdict(Counter)
     category_domain_queries: dict[str, Counter] = defaultdict(Counter)
     seen_domain_minutes: set[tuple[str, str, str]] = set()
@@ -330,9 +331,9 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
     for ev in events:
         local_created_at = utc_naive_to_report_time(ev.created_at)
         day_str = local_created_at.strftime("%d/%m")
-        # app_stop is the v2 duration event. screen_time remains read-only compatibility
-        # for reports created before the Event Item migration.
-        if ev.event_type in ("app_stop", "screen_time"):
+        # Chỉ screen_time do heartbeat tạo từ bộ đếm authoritative của Agent.
+        # Không cộng app_stop vì nhiều process chạy đồng thời sẽ phóng đại thời gian.
+        if ev.event_type == "screen_time":
             if day_str in daily_usage:
                 daily_usage[day_str] += ev.duration_sec
             if ev.created_at >= today_start_utc:
@@ -360,15 +361,10 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
             domain = normalize_domain_subject(ev.subject)
             category = classify_domain(domain)
             category_domain_queries[category][domain] += 1
-            if ev.duration_sec > 0:
-                activity_seconds = ev.duration_sec
-            else:
-                # DNS has no tab-close event. Count at most one activity minute
-                # per domain to avoid inflating pages that trigger many queries.
-                minute_key = local_created_at.strftime("%Y-%m-%dT%H:%M")
-                bucket_key = (domain, day_str, minute_key)
-                activity_seconds = 0 if bucket_key in seen_domain_minutes else DOMAIN_ACTIVITY_BUCKET_SECONDS
-                seen_domain_minutes.add(bucket_key)
+            category_day_queries[category][day_str] += 1
+            # DNS query không chứng minh tab đang được xem bao lâu. Chỉ hiển thị
+            # số truy vấn; duration chỉ được tính nếu một nguồn đo chủ động gửi lên.
+            activity_seconds = max(0, ev.duration_sec)
             category_day_seconds[category][day_str] += activity_seconds
             category_domain_seconds[category][domain] += activity_seconds
 
@@ -448,7 +444,11 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
     for definition in CATEGORY_DEFINITIONS:
         key = definition["key"]
         daily = [
-            {"day": day, "minutes": round(category_day_seconds[key][day] / 60, 1)}
+            {
+                "day": day,
+                "minutes": round(category_day_seconds[key][day] / 60, 1),
+                "queries": category_day_queries[key][day],
+            }
             for day in days_keys
         ]
         domains = [
@@ -466,6 +466,7 @@ def get_child_stats_summary(child_id: str, db: Session) -> dict:
             {
                 **definition,
                 "total_minutes": round(sum(category_day_seconds[key].values()) / 60, 1),
+                "total_queries": sum(category_day_queries[key].values()),
                 "daily": daily,
                 "domains": domains,
             }

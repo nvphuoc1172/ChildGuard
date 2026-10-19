@@ -397,13 +397,8 @@ class PolicyEnforcer:
         self.effective_restriction_type: str = "none"
 
     def _default_notifier(self, notif: dict):
-        """Bộ phát thông báo mặc định: in log console và kích hoạt popup trên Windows."""
+        """Ghi log; TrayUI là nơi duy nhất hiển thị thông báo cho người dùng."""
         print(f"[Enforcer Notifier] 📢 [{notif.get('title')}] {notif.get('message')}")
-        show_windows_popup(
-            title=notif.get("title", "ChildGuard"),
-            message=notif.get("message", ""),
-            level=notif.get("level", "warning"),
-        )
 
     def _emit_warning(
         self,
@@ -1035,6 +1030,10 @@ class PolicyEnforcer:
             self._in_grace_period = False
             self._grace_period_start = None
             self.grace_seconds_left = 0
+            if self.active_notification and self.active_notification.get("level") in {
+                "warning", "urgent", "grace_period"
+            }:
+                self.active_notification = None
 
         if should_lock:
             needs_lock_action = False

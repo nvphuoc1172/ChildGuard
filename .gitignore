@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+.test-*/
 *.egg-info/
 
 # Bí mật & dữ liệu cục bộ — KHÔNG BAO GIỜ commit

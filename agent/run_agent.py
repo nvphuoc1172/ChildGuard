@@ -16,6 +16,7 @@ import ctypes
 import json
 import os
 import signal
+import socket
 import sys
 import threading
 import time
@@ -28,6 +29,19 @@ from logging_utils import configure_agent_console
 from storage import AgentStorage
 from sync import SyncWorker
 from enroll import call_enroll, compute_fingerprint, save_state
+
+_AGENT_MUTEX = None
+
+
+def acquire_agent_single_instance() -> bool:
+    """Ngăn instance thứ hai chiếm cổng IPC/DNS rồi đóng console do lỗi bind."""
+    global _AGENT_MUTEX
+    if sys.platform != "win32":
+        return True
+    _AGENT_MUTEX = ctypes.windll.kernel32.CreateMutexW(
+        None, False, "Local\\ChildGuardAgentCore"
+    )
+    return ctypes.windll.kernel32.GetLastError() != 183
 
 
 def is_admin() -> bool:
@@ -116,6 +130,18 @@ def main():
     parser.add_argument("--pair", action="store_true", help="Nhập mã ghép đôi mới trước khi chạy Agent")
     parser.add_argument("--no-tray", action="store_true", help="Không tự động khởi chạy Tray UI khay hệ thống")
     args = parser.parse_args()
+
+    if not acquire_agent_single_instance():
+        print("[Agent] ChildGuard Agent đã chạy nền. Không khởi động instance thứ hai.")
+        return
+    # Windows Service chạy ở session 0 nên không chia sẻ Local mutex với desktop.
+    # Cổng IPC là kiểm tra thứ hai để lần chạy tay không đâm vào service đang chạy.
+    try:
+        with socket.create_connection(("127.0.0.1", args.ipc_port), timeout=0.25):
+            print("[Agent] ChildGuard Agent đã chạy nền (IPC đang hoạt động).")
+            return
+    except OSError:
+        pass
 
     state_file = Path(args.state)
     ca_cert_path = str(Path(args.ca_cert).resolve())

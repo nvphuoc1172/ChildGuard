@@ -9,7 +9,9 @@ cần sửa gì — WS chỉ làm cho lệnh tới nhanh hơn (<5s thay vì ch�
 heartbeat kế tiếp).
 """
 import json
+import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -20,6 +22,7 @@ from app.policy_rules import normalize_app_rules
 from app.deps import get_current_device
 
 router = APIRouter(tags=["heartbeat"])
+LOCAL_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 
 
 def _latest_policy(db: Session, child_id: str) -> models.Policy | None:
@@ -39,6 +42,25 @@ def heartbeat(
 ):
     now = datetime.utcnow()
     device.last_seen_at = now
+
+    # quota_used_seconds là số liệu authoritative giống hệt mục "Đã dùng" ở
+    # TrayUI. Chỉ ghi phần tăng thêm để giữ biểu đồ lịch sử mà không nhân đôi.
+    quota_date = datetime.now(LOCAL_TIMEZONE).date().isoformat()
+    previous = device.quota_used_seconds if device.quota_date == quota_date else 0
+    current = payload.quota_used_seconds
+    delta = max(0, current - previous)
+    if delta:
+        db.add(models.EventLog(
+            idempotency_key=f"heartbeat-{device.id}-{quota_date}-{current}-{uuid.uuid4().hex[:8]}",
+            device_id=device.id,
+            child_id=device.child_id,
+            event_type="screen_time",
+            duration_sec=delta,
+            policy_version=payload.policy_version,
+            created_at=now,
+        ))
+    device.quota_date = quota_date
+    device.quota_used_seconds = current
 
     latest_policy = _latest_policy(db, device.child_id)
     # Trường hợp lý thuyết: child chưa từng có policy (không nên xảy ra vì

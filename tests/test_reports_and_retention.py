@@ -279,8 +279,10 @@ def test_domain_activity_is_grouped_by_local_day_and_deduplicated_per_minute(db_
 
     stats = get_child_stats_summary(child.id, db_session)
     by_key = {item["key"]: item for item in stats["website_category_usage"]}
-    assert by_key["education"]["total_minutes"] == 2.0
-    assert by_key["social_network"]["total_minutes"] == 1.0
+    # DNS chỉ cho biết số lần phân giải tên miền, không chứng minh thời lượng
+    # người dùng nhìn trang; không được quy đổi mỗi query thành một phút.
+    assert by_key["education"]["total_minutes"] == 0.0
+    assert by_key["social_network"]["total_minutes"] == 0.0
     assert by_key["education"]["domains"][0]["name"] == "wikipedia.org"
     assert by_key["education"]["domains"][0]["queries"] == 3
 

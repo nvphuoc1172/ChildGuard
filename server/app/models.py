@@ -57,6 +57,10 @@ class Device(Base):
     enrolled_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status = Column(String(20), default="active", nullable=False)  # active | revoked
+    # Snapshot authoritative từ bộ đếm của Agent/TrayUI, không suy ra từ thời
+    # lượng các process chạy song song.
+    quota_used_seconds = Column(Integer, default=0, nullable=False)
+    quota_date = Column(String(10), nullable=True)
 
 
 class EnrollmentCode(Base):
