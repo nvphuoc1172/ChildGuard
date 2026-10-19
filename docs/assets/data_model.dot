@@ -1,0 +1,25 @@
+digraph G {
+  graph [rankdir=TB, bgcolor="white", fontname="Times New Roman", nodesep=0.3, ranksep=0.5];
+  node [shape=record, style="filled", fontname="Times New Roman", fontsize=9, color="#24557a", fillcolor="#eef6fb"];
+  edge [fontname="Times New Roman", fontsize=8, color="#4b6475"];
+  parent [label="{Parent|id PK|email|password_hash}"];
+  child [label="{Child|id PK|parent_id FK|display_name}"];
+  device [label="{Device|id PK|child_id FK|fingerprint_hash|status}"];
+  code [label="{EnrollmentCode|code PK|parent_id FK|child_id FK|expires_at|used_at}"];
+  token [label="{Token|id PK|device_id FK|access/refresh hash|expires/revoked}"];
+  policy [label="{Policy|id PK|child_id FK|version|quota/schedule/rules}"];
+  event [label="{EventLog|id PK|idempotency_key UNIQUE|device_id/child_id FK|type/subject/duration}"];
+  command [label="{Command|id PK|device_id FK|type/payload|delivered/acked}"];
+  request [label="{ChildRequest|id PK|child_id/device_id FK|type/status}"];
+  audit [label="{AuditLog|id PK|actor_type/id|action/detail}"];
+  parent -> child [label="1:N"];
+  parent -> code [label="1:N"];
+  child -> device [label="1:N"];
+  child -> policy [label="1:N phiên bản"];
+  child -> event [label="1:N"];
+  child -> request [label="1:N"];
+  device -> token [label="1:N"];
+  device -> event [label="1:N"];
+  device -> command [label="1:N"];
+  device -> request [label="1:N"];
+}
