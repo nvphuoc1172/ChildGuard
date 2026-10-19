@@ -123,3 +123,18 @@ Không thể khẳng định mọi crash đã được loại bỏ nếu chưa c
 
 Xem hướng dẫn Debian/Ubuntu, VMware NAT, TLS SAN, firewall và kết nối Agent tại [README-SERVER.md](README-SERVER.md).
 
+
+## Nếu có lỗi về rớt mạng sau khi cài đặt
+
+- Thử vào Windows + r (nhập "cmd" nhấn enter): ping 8.8.8.8
+- Nếu thấy:
+```
+Reply from 8.8.8.8: bytes=32 time=40ms TTL=116
+```
+- Mạng ok
+- Tiếp tục ở cửa sổ cmd: ping google.com
+```
+Ping request could not find host google.com. Please check the name and try again. 
+```
+- Do cấu hình dns đã bị thay đổi.
+- Ở Windows vào Setting -> Networks and Internet -> Change adapter options -> chuột phải vào mạng wifi -> properties -> IPv4 -> thêm 8.8.8.8 ở dòng cuối. 
