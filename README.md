@@ -75,6 +75,12 @@ Chỉ chạy `--pair` khi muốn chuyển máy sang trẻ khác, thay phiên gh�
 ```powershell
 python agent\run_agent.py --ca-cert agent\certs\ogk-ca.crt --pair
 ```
+Khi muốn dừng lại thì nhấn Crtl+C (chứ không tắt bằng nút X)
+Ctrl+C
+→ shutdown()
+→ dns_proxy.stop()
+→ WindowsDNSManager.restore()
+→ trả DNS về cấu hình trước khi chạy Agent
 
 ### Đã cài Windows Service
 
@@ -124,7 +130,7 @@ Không thể khẳng định mọi crash đã được loại bỏ nếu chưa c
 Xem hướng dẫn Debian/Ubuntu, VMware NAT, TLS SAN, firewall và kết nối Agent tại [README-SERVER.md](README-SERVER.md).
 
 
-## Nếu có lỗi về rớt mạng sau khi cài đặt
+## Nếu có lỗi về rớt mạng sau khi chạy agent (và dừng đột ngột tiến trình agent)
 
 - Thử vào Windows + r (nhập "cmd" nhấn enter): ping 8.8.8.8
 - Nếu thấy:
@@ -136,5 +142,18 @@ Reply from 8.8.8.8: bytes=32 time=40ms TTL=116
 ```
 Ping request could not find host google.com. Please check the name and try again. 
 ```
-- Do cấu hình dns đã bị thay đổi.
+- Do cấu hình dns đã bị thay đổi thành 127.0.0.1.
 - Ở Windows vào Setting -> Networks and Internet -> Change adapter options -> chuột phải vào mạng wifi -> properties -> IPv4 -> thêm 8.8.8.8 ở dòng cuối. 
+
+- Hoặc cấu hình mặc định từ đầu:
+
+```powershell
+Get-NetAdapter |
+    Where-Object Status -eq Up |
+    Set-DnsClientServerAddress -ResetServerAddresses
+
+Clear-DnsClientCache
+
+Get-DnsClientServerAddress -AddressFamily IPv4 |
+    Format-Table InterfaceAlias, ServerAddresses
+```
