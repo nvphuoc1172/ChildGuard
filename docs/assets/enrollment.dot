@@ -1,0 +1,17 @@
+digraph G {
+  graph [rankdir=TB, bgcolor="white", fontname="Times New Roman", nodesep=0.35, ranksep=0.45];
+  node [shape=box, style="rounded,filled", fontname="Times New Roman", fontsize=11, color="#24557a", fillcolor="#eaf4fb"];
+  edge [fontname="Times New Roman", fontsize=9, color="#4b6475"];
+  a [label="1. Phụ huynh chọn trẻ\nvà tạo mã 8 ký tự"];
+  b [label="2. Server lưu mã\nhạn 10 phút, chưa sử dụng"];
+  c [label="3. Agent gửi mã +\nfingerprint đã băm"];
+  d [shape=diamond, label="Mã hợp lệ?", fillcolor="#fff4cc"];
+  e [label="4. Thu hồi thiết bị cũ\ncùng fingerprint (nếu có)"];
+  f [label="5. Tạo Device, policy mặc định,\naccess token và refresh token"];
+  g [label="6. Đánh dấu mã đã dùng\nvà ghi audit enrollment_completed", fillcolor="#eef7e7"];
+  h [label="Trả lỗi 404 / 409 / 410", fillcolor="#fdeaea"];
+  a -> b -> c -> d;
+  d -> e [label="Có"];
+  d -> h [label="Không"];
+  e -> f -> g;
+}

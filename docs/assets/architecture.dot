@@ -1,0 +1,27 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", fontname="Times New Roman", nodesep=0.5, ranksep=0.8];
+  node [shape=box, style="rounded,filled", fontname="Times New Roman", fontsize=11, color="#24557a", fillcolor="#eaf4fb"];
+  edge [fontname="Times New Roman", fontsize=9, color="#4b6475"];
+  subgraph cluster_pc {
+    label="Máy Windows của trẻ"; color="#83b7d8"; style="rounded";
+    tray [label="Tray UI\nTrạng thái · Yêu cầu · Giải thích", fillcolor="#fff4cc"];
+    core [label="Agent Core\nQuota · Lịch · Chặn ứng dụng"];
+    dns [label="DNS Proxy / Hosts\nLọc miền · SafeSearch"];
+    localdb [shape=cylinder, label="SQLite cục bộ\nPolicy cache · Event queue", fillcolor="#eef7e7"];
+    tray -> core [dir=both, label="IPC loopback"];
+    core -> localdb [dir=both];
+    dns -> localdb;
+  }
+  subgraph cluster_server {
+    label="OGK Server"; color="#83b7d8"; style="rounded";
+    api [label="FastAPI\nAuth · Policy · Events · Commands"];
+    db [shape=cylinder, label="SQLite WAL\n10 thực thể", fillcolor="#eef7e7"];
+    dash [label="Dashboard Jinja2\nPhụ huynh", fillcolor="#fff4cc"];
+    api -> db [dir=both, label="SQLAlchemy"];
+    dash -> api [dir=both, label="HTTPS"];
+  }
+  parent [shape=oval, label="Phụ huynh", fillcolor="#fdeaea"];
+  parent -> dash [dir=both, label="Trình duyệt"];
+  core -> api [dir=both, label="HTTPS\nheartbeat · policy · events"];
+  core -> api [dir=both, label="WSS command"];
+}
