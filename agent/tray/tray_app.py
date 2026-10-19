@@ -228,6 +228,28 @@ class TrayApp:
                 wraplength=500,
             ).pack(anchor="w")
 
+            # --- Event diagnostics: client queue versus server acknowledgement ---
+            event_frame = tk.Frame(scrollable_frame, bg="#1e293b", padx=14, pady=10, relief="groove", bd=1)
+            event_frame.pack(fill="x", padx=12, pady=6)
+            tk.Label(
+                event_frame,
+                text="🧪 Chẩn đoán sự kiện Agent gần nhất",
+                font=("Segoe UI", 10, "bold"),
+                fg="#f8fafc",
+                bg="#1e293b",
+            ).pack(anchor="w", pady=(0, 4))
+            event_sync_var = tk.StringVar(value="Đang đọc hàng đợi event...")
+            tk.Label(
+                event_frame,
+                textvariable=event_sync_var,
+                font=("Consolas", 8),
+                fg="#cbd5e1",
+                bg="#1e293b",
+                justify="left",
+                anchor="w",
+                wraplength=500,
+            ).pack(fill="x", anchor="w")
+
             # --- Good Habits / Tips Frame ---
             tips_frame = tk.Frame(scrollable_frame, bg="#1e293b", padx=14, pady=10, relief="groove", bd=1)
             tips_frame.pack(fill="x", padx=12, pady=6)
@@ -402,6 +424,27 @@ class TrayApp:
                     restricted_apps_var.set(", ".join(str(name) for name in restricted_apps))
                 else:
                     restricted_apps_var.set("Hiện không có ứng dụng nào trong danh sách hạn chế.")
+
+                agent_events = st.get("recent_agent_events", [])[:8]
+                diagnostic_lines = []
+                for event in agent_events:
+                    status_text = "SERVER_ACK" if event.get("status") == "sent" else "PENDING"
+                    diagnostic_lines.append(
+                        f"[{status_text}] {event.get('created_at', '-')}  "
+                        f"{event.get('type', '-')}  {event.get('subject') or '—'}"
+                    )
+                pending_count = st.get("pending_event_count", 0)
+                last_error = st.get("last_event_sync_error")
+                dns_diag = st.get("dns_diagnostics", {})
+                dns_status = "ROUTED" if dns_diag.get("routing_active") else "NOT_ROUTED"
+                header = f"DNS={dns_status} | Đang chờ gửi: {pending_count}"
+                if last_error:
+                    header += f" | Lỗi gửi: {last_error}"
+                elif st.get("last_event_sync_at"):
+                    header += f" | ACK gần nhất: {st['last_event_sync_at']}"
+                if not diagnostic_lines:
+                    diagnostic_lines.append("Chưa có event cục bộ nào được tạo.")
+                event_sync_var.set(header + "\n" + "\n".join(diagnostic_lines))
 
                 root.after(2000, _update_kid_info)
 

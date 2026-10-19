@@ -146,6 +146,11 @@ def main():
 
     # 1. Khởi tạo Storage cục bộ (SQLite)
     storage = AgentStorage()
+    if storage.bind_device(config["device_id"]):
+        print(
+            "[Agent] Thiết bị vừa ghép đôi mới: đã tách hàng đợi event, quota và policy "
+            "cũ để không gán log của trẻ trước sang trẻ mới."
+        )
     print("[Agent] ✓ Đã khởi tạo kho lưu trữ cục bộ SQLite (agent_state/agent.db)")
 
     # 2. Khởi tạo Policy Enforcer

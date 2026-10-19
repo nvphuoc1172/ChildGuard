@@ -27,6 +27,7 @@ from dns_proxy import (
     YOUTUBE_SAFESEARCH_IPV6,
     DNSProxyServer,
     HostsBlocker,
+    WindowsDNSManager,
     build_blocked_response,
     build_safesearch_response,
     get_safesearch_target,
@@ -34,6 +35,28 @@ from dns_proxy import (
     normalize_domain,
     parse_dns_domain,
 )
+
+
+def test_windows_dns_manager_routes_and_restores_active_adapters():
+    manager = WindowsDNSManager()
+    responses = [
+        MagicMock(
+            returncode=0,
+            stdout='[{"InterfaceIndex":7,"ServerAddresses":["192.0.2.53"]}]',
+            stderr="",
+        ),
+        MagicMock(returncode=0, stdout="", stderr=""),
+        MagicMock(returncode=0, stdout="", stderr=""),
+    ]
+    with patch("dns_proxy.sys.platform", "win32"), patch.object(
+        manager, "_run_powershell", side_effect=responses
+    ) as run_ps:
+        assert manager.enable_local_proxy() is True
+        assert manager.configured is True
+        assert "127.0.0.1" in run_ps.call_args_list[1].args[0]
+        manager.restore()
+        assert "192.0.2.53" in run_ps.call_args_list[2].args[0]
+        assert manager.configured is False
 
 
 def test_normalize_domain():

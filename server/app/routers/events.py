@@ -4,6 +4,7 @@
 Có xử lý Idempotency Key chống đếm trùng thời gian sử dụng và log chặn.
 """
 from datetime import datetime, timezone
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
@@ -14,6 +15,7 @@ from app.database import get_db
 from app.deps import get_current_device
 
 router = APIRouter(tags=["events"])
+logger = logging.getLogger("childguard.events")
 
 
 @router.post("/events/batch", response_model=schemas.BatchEventsResponse)
@@ -58,14 +60,25 @@ def batch_events(
             policy_version=ev.policy_version,
             created_at=created_dt,
         )
-        db.add(log_entry)
         try:
-            db.flush()
+            # SAVEPOINT prevents one duplicate/racing insert from rolling back
+            # the valid events already flushed earlier in the same batch.
+            with db.begin_nested():
+                db.add(log_entry)
+                db.flush()
             processed += 1
         except IntegrityError:
-            db.rollback()
             ignored += 1
 
     db.commit()
+    logger.info(
+        "EVENT_BATCH device=%s child=%s received=%d processed=%d ignored=%d types=%s",
+        device.id,
+        device.child_id,
+        len(payload.events),
+        processed,
+        ignored,
+        ",".join(ev.type for ev in payload.events),
+    )
 
     return schemas.BatchEventsResponse(processed=processed, ignored=ignored)

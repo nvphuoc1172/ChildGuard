@@ -133,12 +133,19 @@ class SyncWorker:
         ]
 
         try:
+            event_summary = ", ".join(
+                f"{ev['type']}:{ev['subject'] or '-'}" for ev in payload_events
+            )
+            print(f"[Sync Events] UPLOAD count={len(payload_events)} [{event_summary}]")
             res = self._http_request("/events/batch", method="POST", body={"events": payload_events})
             event_ids = [ev["id"] for ev in events]
             self.storage.mark_events_sent(event_ids)
             self.last_event_sync_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             self.last_event_sync_error = None
-            print(f"[Sync] Đã gửi {res.get('processed')} sự kiện lên server (bỏ qua {res.get('ignored')} trùng).")
+            print(
+                f"[Sync Events] SERVER_ACK processed={res.get('processed')} "
+                f"ignored={res.get('ignored')}"
+            )
             return len(event_ids)
         except Exception as e:
             self.last_event_sync_error = str(e)

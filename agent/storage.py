@@ -146,6 +146,30 @@ class AgentStorage:
                 "domain_rules": json.loads(row["domain_rules_json"]),
             }
 
+    def bind_device(self, device_id: str) -> bool:
+        """Bind the local database to one child device and isolate re-pairing data.
+
+        Returns True when local data from a previous/unknown pairing was reset.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT device_id FROM agent_state WHERE id = 1").fetchone()
+            previous_device_id = row["device_id"] if row else None
+            if previous_device_id == device_id:
+                return False
+            conn.execute("DELETE FROM event_queue")
+            conn.execute("DELETE FROM cached_policy")
+            conn.execute(
+                """
+                UPDATE agent_state
+                SET device_id = ?, quota_used_seconds = 0, is_locked = 0,
+                    in_degraded_mode = 0, current_date = ?
+                WHERE id = 1
+                """,
+                (device_id, self.get_current_utc_date_str()),
+            )
+            conn.commit()
+        return True
+
     def save_policy(self, policy_data: dict):
         """Lưu chính sách mới từ server vào cache."""
         version = policy_data.get("version", 1)
@@ -210,6 +234,10 @@ class AgentStorage:
                 (idempotency_key, event_type, normalized_subject, duration_sec, policy_version, now_str),
             )
             conn.commit()
+        print(
+            f"[Event Queue] CREATED type={event_type} subject={normalized_subject or '-'} "
+            f"duration={duration_sec}s created_at={now_str} key={idempotency_key}"
+        )
         return idempotency_key
 
     def get_pending_events(self, limit: int = 100) -> list[dict]:
@@ -232,15 +260,42 @@ class AgentStorage:
             ]
 
     def mark_events_sent(self, event_ids: list[int]):
-        """Đánh dấu các sự kiện đã gửi thành công lên server."""
+        """Đánh dấu đã gửi và giữ một lịch sử nhỏ để chẩn đoán trên Tray UI."""
         if not event_ids:
             return
         placeholders = ",".join("?" for _ in event_ids)
         with self._get_connection() as conn:
             conn.execute(f"UPDATE event_queue SET sent = 1 WHERE id IN ({placeholders})", event_ids)
-            # Dọn dẹp các event đã gửi
-            conn.execute("DELETE FROM event_queue WHERE sent = 1 AND id IN (" + placeholders + ")", event_ids)
+            conn.execute(
+                """
+                DELETE FROM event_queue
+                WHERE sent = 1 AND id NOT IN (
+                    SELECT id FROM event_queue WHERE sent = 1 ORDER BY id DESC LIMIT 200
+                )
+                """
+            )
             conn.commit()
+
+    def get_recent_events(self, limit: int = 20) -> list[dict]:
+        """Các event Agent vừa tạo, gồm cả đang chờ và đã được Server nhận."""
+        safe_limit = max(1, min(int(limit), 200))
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM event_queue ORDER BY id DESC LIMIT ?", (safe_limit,)
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "idempotency_key": row["idempotency_key"],
+                "type": row["event_type"],
+                "subject": row["subject"],
+                "duration_sec": row["duration_sec"],
+                "policy_version": row["policy_version"],
+                "created_at": row["created_at"],
+                "status": "sent" if row["sent"] else "pending",
+            }
+            for row in rows
+        ]
 
     def clear_all_cached_data(self):
         """Xóa toàn bộ hàng đợi sự kiện và reset bộ đếm thời gian trên Agent (khi phụ huynh yêu cầu xóa dữ liệu)."""

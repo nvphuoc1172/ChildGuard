@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import ipaddress
+import json
 import os
 import shutil
 import socket
@@ -39,6 +41,104 @@ TAG_START = "# --- CHILDGUARD_MANAGED_BLOCK_START ---"
 TAG_END = "# --- CHILDGUARD_MANAGED_BLOCK_END ---"
 TAG_SAFESEARCH_START = "# --- CHILDGUARD_SAFESEARCH_START ---"
 TAG_SAFESEARCH_END = "# --- CHILDGUARD_SAFESEARCH_END ---"
+
+
+class WindowsDNSManager:
+    """Route active Windows adapters through the local proxy and restore them."""
+
+    def __init__(self):
+        self.original_adapters: list[dict] = []
+        self.configured = False
+
+    @staticmethod
+    def _run_powershell(script: str) -> subprocess.CompletedProcess:
+        encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        return subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+
+    def enable_local_proxy(self) -> bool:
+        if sys.platform != "win32":
+            return False
+        capture = self._run_powershell(
+            "$items = Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { "
+            "$dns = @(Get-DnsClientServerAddress -InterfaceIndex $_.ifIndex | "
+            "ForEach-Object { $_.ServerAddresses } | Where-Object { $_ }); "
+            "[pscustomobject]@{ InterfaceIndex = [int]$_.ifIndex; ServerAddresses = $dns } }; "
+            "@($items) | ConvertTo-Json -Compress"
+        )
+        if capture.returncode != 0:
+            print(f"[DNS Proxy] Không đọc được cấu hình DNS card mạng: {capture.stderr.strip()}")
+            return False
+        try:
+            decoded = json.loads(capture.stdout.strip() or "[]")
+            adapters = decoded if isinstance(decoded, list) else [decoded]
+            self.original_adapters = []
+            for item in adapters:
+                index = int(item["InterfaceIndex"])
+                addresses = item.get("ServerAddresses") or []
+                if isinstance(addresses, str):
+                    addresses = [addresses]
+                valid_addresses = []
+                for address in addresses:
+                    try:
+                        valid_addresses.append(str(ipaddress.ip_address(address)))
+                    except ValueError:
+                        continue
+                self.original_adapters.append(
+                    {"interface_index": index, "server_addresses": valid_addresses}
+                )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            print(f"[DNS Proxy] Không phân tích được cấu hình DNS card mạng: {exc}")
+            return False
+        if not self.original_adapters:
+            print("[DNS Proxy] Không tìm thấy card mạng đang hoạt động để chuyển DNS về local proxy.")
+            return False
+
+        indexes = ",".join(str(item["interface_index"]) for item in self.original_adapters)
+        configured = self._run_powershell(
+            f"@({indexes}) | ForEach-Object {{ "
+            "Set-DnsClientServerAddress -InterfaceIndex $_ -ServerAddresses @('127.0.0.1') "
+            "-ErrorAction Stop }; Clear-DnsClientCache"
+        )
+        if configured.returncode != 0:
+            print(f"[DNS Proxy] Không thể chuyển DNS về 127.0.0.1: {configured.stderr.strip()}")
+            return False
+        self.configured = True
+        print(
+            f"[DNS Proxy] ✓ Đã chuyển {len(self.original_adapters)} card mạng đang hoạt động "
+            "qua 127.0.0.1:53 để ghi nhận domain_query/blocked_domain."
+        )
+        return True
+
+    def restore(self) -> None:
+        if not self.configured or sys.platform != "win32":
+            return
+        commands = []
+        for item in self.original_adapters:
+            index = item["interface_index"]
+            addresses = item["server_addresses"]
+            if addresses:
+                quoted = ",".join(f"'{address}'" for address in addresses)
+                commands.append(
+                    f"Set-DnsClientServerAddress -InterfaceIndex {index} "
+                    f"-ServerAddresses @({quoted}) -ErrorAction Continue"
+                )
+            else:
+                commands.append(
+                    f"Set-DnsClientServerAddress -InterfaceIndex {index} "
+                    "-ResetServerAddresses -ErrorAction Continue"
+                )
+        result = self._run_powershell("; ".join(commands) + "; Clear-DnsClientCache")
+        if result.returncode == 0:
+            print("[DNS Proxy] ✓ Đã khôi phục cấu hình DNS card mạng ban đầu.")
+        else:
+            print(f"[DNS Proxy] Cảnh báo: khôi phục DNS chưa thành công: {result.stderr.strip()}")
+        self.configured = False
 
 # -------------------------------------------------------------
 # CẤU HÌNH DANH SÁCH MIỄN CHẶN VĨNH VIỄN (NT6)
@@ -668,6 +768,8 @@ class DNSProxyServer:
         self.sock: socket.socket | None = None
         self._blacklist_cache: List[str] = []
         self._last_dns_notif: dict[str, float] = {}
+        self._dns_manager = WindowsDNSManager()
+        self._dns_routing_active = False
 
     def notify_dns_blocked(self, domain: str):
         """Phát thông báo ra ngoài màn hình Windows khi tên miền web bị chặn."""
@@ -721,8 +823,16 @@ class DNSProxyServer:
             if normalize_domain(d) and not is_bypass_domain(d)
         ]
 
-        # Áp dụng vào Windows Hosts (kèm cưỡng chế SafeSearch)
-        HostsBlocker.apply_blacklist(self._blacklist_cache, enforce_safesearch=self.enforce_safesearch)
+        # Khi lưu lượng đã đi qua local proxy, không ghi blacklist vào hosts vì
+        # Windows sẽ xử lý hosts trước DNS và Agent sẽ không thể ghi event.
+        if self._dns_routing_active:
+            HostsBlocker.clear()
+        else:
+            # Fallback bảo vệ khi chưa chuyển được DNS card mạng.
+            HostsBlocker.apply_blacklist(
+                self._blacklist_cache,
+                enforce_safesearch=self.enforce_safesearch,
+            )
 
     def is_domain_blocked(self, domain: str) -> bool:
         """Kiểm tra tên miền có bị chặn hay không.
@@ -799,8 +909,8 @@ class DNSProxyServer:
 
             # 4. Tên miền thông thường -> Forward sang Upstream DNS (8.8.8.8)
             self._forward_query(data, client_addr)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[DNS Proxy] Lỗi xử lý truy vấn từ {client_addr}: {exc}")
 
     def _forward_query(self, data: bytes, client_addr: tuple):
         """Chuyển tiếp truy vấn DNS tới Upstream DNS Server (8.8.8.8)."""
@@ -811,8 +921,8 @@ class DNSProxyServer:
             up_resp, _ = up_sock.recvfrom(4096)
             if self.sock:
                 self.sock.sendto(up_resp, client_addr)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[DNS Proxy] Lỗi chuyển tiếp truy vấn tới {self.upstream_dns}: {exc}")
         finally:
             up_sock.close()
 
@@ -830,6 +940,18 @@ class DNSProxyServer:
             print("[DNS Proxy] Chức năng chặn web & SafeSearch qua file Windows Hosts vẫn đang bảo vệ bình thường!")
             return
 
+        if self.host == "127.0.0.1" and self.port == 53:
+            self._dns_routing_active = self._dns_manager.enable_local_proxy()
+            if self._dns_routing_active:
+                # Xóa block hosts vừa tạo lúc khởi động; từ đây mọi quyết định
+                # allow/block và event đều do handle_query thực hiện.
+                HostsBlocker.clear()
+            else:
+                print(
+                    "[DNS Proxy] CẢNH BÁO: website vẫn được bảo vệ bằng hosts nhưng "
+                    "domain_query/blocked_domain sẽ không đầy đủ cho tới khi DNS card mạng dùng 127.0.0.1."
+                )
+
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(4096)
@@ -843,6 +965,8 @@ class DNSProxyServer:
         self.running = False
         if self.sock:
             self.sock.close()
+        self._dns_manager.restore()
+        self._dns_routing_active = False
         # Dọn dẹp sạch file hosts khi dừng agent
         HostsBlocker.clear()
         print("[DNS Proxy] Đã khôi phục file hosts về trạng thái ban đầu.")

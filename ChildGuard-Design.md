@@ -563,7 +563,7 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
   - **Trình duyệt bật DoH (DNS-over-HTTPS)**: Edge/Chrome tự ý gửi truy vấn HTTPS mã hóa ra ngoài, bỏ qua DNS cục bộ của máy tính.
   - **Lỗi không ghi được vào file hosts do thiếu quyền Administrator**: File `C:\Windows\System32\drivers\etc\hosts` được bảo vệ nghiêm ngặt bởi Windows ACL (chỉ Administrators mới có quyền ghi) và thường bị đặt cờ `ReadOnly`. Khi Agent chạy dưới quyền user thông thường hoặc chưa nâng quyền UAC, hàm ghi file gặp `PermissionError: [Errno 13] Permission denied`.
 - **Cách sửa & Cải tiến Kiến trúc 2 lớp**:
-  1. **Lớp 1 - Windows Hosts Blocker (Chặn cấp hệ điều hành không thể bypass)**: Xây dựng class `HostsBlocker` trong `agent/dns_proxy.py`. Tự động đồng bộ danh sách cấm trực tiếp vào tệp hệ thống `C:\Windows\System32\drivers\etc\hosts` cho cả IPv4 (`0.0.0.0`) và IPv6 (`::`), mở rộng cho cả `www.` và tên miền gốc. File hosts có độ ưu tiên cao nhất trong hệ điều hành Windows, chặn đứng mọi trình duyệt mà không cần can thiệp card mạng thủ công. Khi Agent dừng, tự động khôi phục file hosts về nguyên trạng.
+  1. **DNS Proxy là lớp chính, Windows Hosts là fallback**: Sau khi bind thành công `127.0.0.1:53`, `WindowsDNSManager` lưu cấu hình DNS hiện tại của các card mạng đang hoạt động rồi tự động chuyển chúng về local proxy. Khi Agent dừng, cấu hình DNS ban đầu được khôi phục. Chỉ khi không bind/chuyển DNS được, `HostsBlocker` mới ghi danh sách cấm vào `C:\Windows\System32\drivers\etc\hosts`; fallback này vẫn chặn được nhưng không thể quan sát đầy đủ truy vấn thực tế.
      - **Xử lý quyền Administrator & Phân quyền ACL tự động**:
        - *Tháo cờ Read-Only*: Tự động gỡ thuộc tính chỉ đọc của file hosts trước khi ghi (`stat.S_IWRITE` và `SetFileAttributesW`).
        - *Tự động cấp quyền vĩnh viễn (One-time ACL Grant)*: Khi có quyền Admin, tự động cấp quyền `Modify` cho nhóm `Users` (`icacls "%SystemRoot%\System32\drivers\etc\hosts" /grant "*S-1-5-32-545:(M)" /c`). Nhờ đó, tất cả các lần cập nhật chính sách sau (kể cả khi chạy quyền người dùng thông thường hoặc dọn dẹp khi dừng) đều có thể ghi trực tiếp tức thì mà không cần hỏi lại UAC.
@@ -575,6 +575,7 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
      - Nếu truy vấn Type 65 (HTTPS) hoặc loại khác $\rightarrow$ Trả về mã lỗi `NXDOMAIN` (RCODE = 3).
   3. **Hàm `normalize_domain`**: Tự động bóc tách và làm sạch mọi tiền tố `http://`, `https://`, số cổng và đường dẫn. Tự động gọi `ipconfig /flushdns` sau khi cập nhật.
       - Sau khi phân tích DNS, Agent ghi `domain_query` với `subject` là eTLD+1. Nếu quyết định chặn, Agent ghi thêm `blocked_domain` cho cùng eTLD+1; không đưa QNAME đầy đủ hoặc URL vào `subject`.
+      - Không dùng file hosts đồng thời với proxy đang hoạt động vì Windows xử lý hosts trước DNS; làm vậy website bị chặn nhưng `handle_query()` không chạy và cả `domain_query` lẫn `blocked_domain` đều bị thiếu.
   4. **Policy mặc định từ tệp**: Khi ghép đôi thiết bị cho trẻ chưa có policy, Server đọc `server/data/default_blocked_domains.txt`, tạo `domain_rules.mode="blacklist"`, bật SafeSearch và gửi danh sách xuống Agent. Phụ huynh vẫn có thể chỉnh danh sách riêng cho từng trẻ trên Dashboard.
 
 ---
@@ -645,6 +646,8 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
   - Truyền tham chiếu `dns_proxy` vào khởi tạo của `SyncWorker`. Khi `fetch_and_apply_policy()` tải xong chính sách mới từ server, tự động kích hoạt `self.dns_proxy.sync_policy_rules(policy_data)` để cập nhật file hosts và bộ lọc DNS ngay lập tức mà không cần khởi động lại tiến trình.
   - Tách việc gửi event khỏi heartbeat: một luồng riêng gọi `POST /events/batch` mỗi 5 giây. Lỗi heartbeat, tải policy hoặc WebSocket vì vậy không còn làm hàng đợi nhật ký bị kẹt.
   - Access Token chỉ được làm mới khi thực sự gần hết hạn hoặc Server trả về `401/403`; không làm mới vô điều kiện khi Agent vừa chạy hay WebSocket vừa ngắt.
+  - Agent giữ tối đa 200 event đã được Server ACK cùng các event còn chờ. IPC `/status` và “Góc của bé” hiển thị `PENDING`/`SERVER_ACK`, trạng thái định tuyến DNS và lỗi đồng bộ gần nhất; console in `CREATED`, `UPLOAD`, `SERVER_ACK` để xác định lỗi nằm ở bước tạo event, mạng hay Server.
+  - Khi `device_id` thay đổi do ghép đôi lại, Agent xóa event queue, quota và cached policy của thiết bị cũ trước khi chạy để không gán dữ liệu hoặc timestamp của trẻ trước cho trẻ mới.
 
 ---
 
@@ -716,6 +719,7 @@ Phần này ghi lại chi tiết các module chức năng đã xây dựng, tố
 - `domain_query` hiện không có sự kiện đóng tab. Vì vậy thời gian website được ghi rõ là **ước tính**: mỗi `(domain, phút)` có ít nhất một truy vấn DNS được tính một phút và các truy vấn lặp trong cùng phút được khử trùng lặp. Nếu Event Item tương lai cung cấp `duration_sec > 0`, báo cáo ưu tiên thời lượng đó.
 - Timestamp luôn được lưu dưới dạng UTC. Khi tổng hợp ngày, giờ và hiển thị trên Dashboard, Server chuyển sang `Asia/Ho_Chi_Minh` bằng `zoneinfo`; không cộng cứng 7 giờ. Do đó sự kiện `09:02:00Z` hiển thị `16:02:00` GMT+7 và được xếp vào đúng ngày địa phương.
 - Nhật ký gần nhất được truy vấn riêng bằng `ORDER BY created_at DESC, id DESC LIMIT 20`, không bị giới hạn bởi cửa sổ biểu đồ bảy ngày. Partial HTMX `/dashboard/reports/recent-events` tự tải lại mỗi 5 giây, trả header `Cache-Control: no-store` để nhận batch mới mà không làm mới toàn trang.
+- Endpoint batch dùng savepoint cho từng Event Item; một idempotency key trùng do race không rollback các event hợp lệ đứng trước trong cùng batch.
 - Console của `run_agent.py` được cấu hình tại `agent/logging_utils.py`: mọi dòng có timestamp theo múi giờ máy, `stdout/stderr` dùng chế độ line-buffered/write-through và `print(..., flush=True)`. Trên Windows, chế độ Quick Edit bị tắt để thao tác chọn văn bản không vô tình đóng băng tiến trình cho tới khi nhấn Enter/Esc.
 
 ---

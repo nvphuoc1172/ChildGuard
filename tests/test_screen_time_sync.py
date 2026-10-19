@@ -42,6 +42,34 @@ def temp_storage(tmp_path):
     return storage
 
 
+def test_agent_event_diagnostics_retain_server_ack(temp_storage):
+    event_key = temp_storage.add_event("blocked_domain", subject="sub.example.com")
+    pending = temp_storage.get_pending_events()
+    assert len(pending) == 1
+    temp_storage.mark_events_sent([pending[0]["id"]])
+
+    assert temp_storage.get_pending_events() == []
+    recent = temp_storage.get_recent_events()
+    assert recent[0]["idempotency_key"] == event_key
+    assert recent[0]["type"] == "blocked_domain"
+    assert recent[0]["subject"] == "example.com"
+    assert recent[0]["status"] == "sent"
+
+
+def test_repairing_device_isolates_old_child_data(temp_storage):
+    assert temp_storage.bind_device("device-old") is True
+    temp_storage.save_policy({"version": 9, "app_rules": {"blacklist": ["game.exe"]}})
+    temp_storage.add_event("app_start", subject="study.exe")
+
+    assert temp_storage.bind_device("device-old") is False
+    assert len(temp_storage.get_pending_events()) == 1
+
+    assert temp_storage.bind_device("device-new") is True
+    assert temp_storage.get_pending_events() == []
+    assert temp_storage.get_recent_events() == []
+    assert temp_storage.get_policy()["version"] == 0
+
+
 def test_monotonic_screen_time_precision_within_30s_per_hour(temp_storage):
     """Kiểm tra độ chính xác: Sai số tích lũy sau 1 giờ (3600s) <= +-30s (chuẩn yêu cầu)."""
     enforcer = PolicyEnforcer(

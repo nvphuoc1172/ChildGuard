@@ -43,6 +43,7 @@ class IPCHandler(BaseHTTPRequestHandler):
             active_notification = getattr(self.enforcer, "active_notification", None) if self.enforcer else None
             effective_rem_sec = getattr(self.enforcer, "effective_remaining_seconds", 0) if self.enforcer else 0
             effective_res_type = getattr(self.enforcer, "effective_restriction_type", "none") if self.enforcer else "none"
+            dns_proxy = getattr(self.sync_worker, "dns_proxy", None) if self.sync_worker else None
 
             app_rules = policy.get("app_rules", {})
             raw_restricted_apps = (
@@ -92,6 +93,15 @@ class IPCHandler(BaseHTTPRequestHandler):
                 "pending_event_count": len(self.storage.get_pending_events()),
                 "last_event_sync_at": getattr(self.sync_worker, "last_event_sync_at", None),
                 "last_event_sync_error": getattr(self.sync_worker, "last_event_sync_error", None),
+                "recent_agent_events": self.storage.get_recent_events(limit=20),
+                "dns_diagnostics": {
+                    "running": bool(getattr(dns_proxy, "running", False)),
+                    "routing_active": bool(getattr(dns_proxy, "_dns_routing_active", False)),
+                    "listen_address": (
+                        f"{getattr(dns_proxy, 'host', '127.0.0.1')}:"
+                        f"{getattr(dns_proxy, 'port', 53)}"
+                    ),
+                },
                 "policy": policy,
                 "time_blocks": {
                     "morning_minutes": morning_m,
