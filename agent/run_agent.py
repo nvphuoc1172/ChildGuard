@@ -31,6 +31,8 @@ from sync import SyncWorker
 from enroll import call_enroll, compute_fingerprint, save_state
 
 _AGENT_MUTEX = None
+AGENT_DIR = Path(__file__).resolve().parent
+DEFAULT_STATE_PATH = AGENT_DIR / "agent_state" / "device_token.json"
 
 
 def acquire_agent_single_instance() -> bool:
@@ -118,7 +120,11 @@ def enroll_from_console(state_path: Path, server: str, port: int, ca_cert: str, 
 def main():
     configure_agent_console()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--state", default="agent_state/device_token.json", help="Đường dẫn file token ghép đôi")
+    parser.add_argument(
+        "--state",
+        default=str(DEFAULT_STATE_PATH),
+        help="Đường dẫn file token ghép đôi (mặc định: agent/agent_state/device_token.json)",
+    )
     parser.add_argument("--ca-cert", default="certs/ogk-ca.crt", help="Đường dẫn chứng chỉ CA nội bộ")
     parser.add_argument("--dns-port", type=int, default=53, help="Cổng DNS Proxy (mặc định: 53)")
     parser.add_argument("--ipc-port", type=int, default=48123, help="Cổng IPC Server (mặc định: 48123)")

@@ -243,6 +243,14 @@ def test_heartbeat_syncs_server_time_and_date(client, db_session, temp_storage):
     assert "server_time" in data and data["server_time"] is not None
     assert "server_timestamp" in data and data["server_timestamp"] is not None
 
+    # Regression: datetime.utcnow().timestamp() treats a naive UTC datetime as
+    # host-local time and produced a -7 hour shift on Asia/Ho_Chi_Minh hosts.
+    from datetime import timezone
+    response_utc = datetime.fromisoformat(data["server_time"].replace("Z", "+00:00"))
+    assert response_utc.tzinfo == timezone.utc
+    assert abs(response_utc.timestamp() - data["server_timestamp"]) < 1.0
+    assert abs(datetime.now(timezone.utc).timestamp() - data["server_timestamp"]) < 5.0
+
     # SyncWorker nhận response và gọi sync_server_time
     temp_storage.sync_server_time(data["server_timestamp"])
     synced_ts = temp_storage.get_server_utc_timestamp()

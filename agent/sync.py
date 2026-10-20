@@ -106,6 +106,15 @@ class SyncWorker:
         print("[Sync] Đang đồng bộ chính sách từ server GET /policy...")
         policy_data = self._http_request("/policy", method="GET")
         self.storage.save_policy(policy_data)
+        # Keep the diagnostic version in device_token.json aligned with the
+        # authoritative cached policy. Runtime enforcement still reads SQLite.
+        if self.state_path.exists():
+            with self._token_lock:
+                state = json.loads(self.state_path.read_text(encoding="utf-8"))
+                state["policy_version"] = int(policy_data.get("version", 0))
+                tmp_path = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
+                tmp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+                tmp_path.replace(self.state_path)
         print(f"[Sync] Đã cập nhật chính sách phiên bản v{policy_data.get('version')} thành công.")
         if self.dns_proxy:
             self.dns_proxy.sync_policy_rules(policy_data)

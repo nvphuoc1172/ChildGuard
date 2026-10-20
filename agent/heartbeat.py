@@ -20,6 +20,9 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+AGENT_DIR = Path(__file__).resolve().parent
+DEFAULT_STATE_PATH = AGENT_DIR / "agent_state" / "device_token.json"
+
 
 def load_state(path: Path) -> dict:
     if not path.exists():
@@ -73,7 +76,7 @@ def main() -> None:
     parser.add_argument("--server", required=True)
     parser.add_argument("--port", type=int, default=8443)
     parser.add_argument("--ca-cert", required=True)
-    parser.add_argument("--state", default="agent_state/device_token.json")
+    parser.add_argument("--state", default=str(DEFAULT_STATE_PATH))
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--once", action="store_true", help="Gửi 1 lần rồi thoát, không lặp")
     args = parser.parse_args()

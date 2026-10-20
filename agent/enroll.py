@@ -29,6 +29,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+AGENT_DIR = Path(__file__).resolve().parent
+DEFAULT_STATE_PATH = AGENT_DIR / "agent_state" / "device_token.json"
+
 try:
     import winreg
 except ImportError:  # pragma: no cover - chỉ chạy thật trên Windows
@@ -113,8 +116,8 @@ def main() -> None:
     parser.add_argument("--code", help="Mã ghép đôi (nếu bỏ qua, script sẽ hỏi)")
     parser.add_argument(
         "--out",
-        default="agent_state/device_token.json",
-        help="Nơi lưu device_id + token (mặc định: agent_state/device_token.json)",
+        default=str(DEFAULT_STATE_PATH),
+        help="Nơi lưu device_id + token (mặc định: agent/agent_state/device_token.json)",
     )
     args = parser.parse_args()
 

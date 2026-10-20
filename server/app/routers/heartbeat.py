@@ -10,7 +10,7 @@ heartbeat kế tiếp).
 """
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -40,7 +40,12 @@ def heartbeat(
     device: models.Device = Depends(get_current_device),
     db: Session = Depends(get_db),
 ):
-    now = datetime.utcnow()
+    # Keep UTC storage naive for the existing SQLite schema, but derive the
+    # epoch from an aware UTC value. Calling timestamp() on datetime.utcnow()
+    # interprets that naive value in the host timezone (UTC+7 in production)
+    # and shifts every Agent event seven hours into the past.
+    now_aware = datetime.now(timezone.utc)
+    now = now_aware.replace(tzinfo=None)
     device.last_seen_at = now
 
     # quota_used_seconds là số liệu authoritative giống hệt mục "Đã dùng" ở
@@ -94,7 +99,7 @@ def heartbeat(
         policy_changed=policy_changed,
         pending_commands=out_commands,
         server_time=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        server_timestamp=now.timestamp(),
+        server_timestamp=now_aware.timestamp(),
     )
 
 

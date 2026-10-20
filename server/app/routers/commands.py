@@ -7,7 +7,7 @@ Hỗ trợ:
 - WS /ws/{device_id}: Kênh WebSocket thời gian thực cho Agent.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 
 from fastapi import (
@@ -180,11 +180,12 @@ async def websocket_device_endpoint(
     await manager.connect(device_id, websocket)
 
     # Gửi thông điệp time_sync để Agent đồng bộ thời gian chuẩn UTC với Server
-    now_ws = datetime.utcnow()
+    now_ws_aware = datetime.now(timezone.utc)
+    now_ws = now_ws_aware.replace(tzinfo=None)
     await websocket.send_json({
         "type": "time_sync",
         "server_time": now_ws.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "server_timestamp": now_ws.timestamp(),
+        "server_timestamp": now_ws_aware.timestamp(),
     })
 
     try:
