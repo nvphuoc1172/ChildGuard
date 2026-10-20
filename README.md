@@ -130,7 +130,9 @@ Không thể khẳng định mọi crash đã được loại bỏ nếu chưa c
 Xem hướng dẫn Debian/Ubuntu, VMware NAT, TLS SAN, firewall và kết nối Agent tại [README-SERVER.md](README-SERVER.md).
 
 
-## Nếu có lỗi về rớt mạng sau khi chạy agent (và dừng đột ngột tiến trình agent)
+## Nếu có lỗi về rớt mạng ở máy ảo (ping 8.8.8.8 không được luôn)
+- Vào service -.
+## Nếu có lỗi không ping được google.com sau khi chạy agent (và dừng đột ngột tiến trình agent)
 
 - Thử vào Windows + r (nhập "cmd" nhấn enter): ping 8.8.8.8
 - Nếu thấy:
