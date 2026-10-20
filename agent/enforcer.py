@@ -970,7 +970,9 @@ class PolicyEnforcer:
         self.effective_restriction_type = res_type
         self.check_and_emit_warnings(policy)
 
-        # 4. Kiểm tra điều kiện khóa máy & Khoảng ân hạn 60 giây để trẻ lưu bài
+        # 4. Kiểm tra điều kiện khóa máy. Không dùng "ân hạn 60 giây": cơ chế cũ
+        # có thể tự khởi động lại sau mỗi lần người dùng mở khóa và tạo vòng lặp
+        # popup/khóa máy. Mỗi đợt vi phạm chính sách chỉ gọi LockWorkStation một lần.
         used_seconds = self.storage.get_screen_time_today()
         in_schedule = self.check_schedule(schedule)
         quota_exceeded = used_seconds >= daily_limit_sec
@@ -987,44 +989,18 @@ class PolicyEnforcer:
             self._grace_period_start = None
             self.grace_seconds_left = 0
         elif time_expired:
-            if is_already_locked and workstation_locked:
-                # Máy đã khóa từ trước trên Lock Screen -> giữ nguyên trạng thái khóa
-                should_lock = True
-                if quota_exceeded:
-                    lock_reason = f"Đã hết hạn mức ngày ({used_seconds}/{daily_limit_sec}s)"
-                else:
-                    day_names = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
-                    now_dt = self._get_effective_local_datetime()
-                    lock_reason = f"Ngoài khung giờ cho phép ({day_names[now_dt.weekday()]} lúc {now_dt.strftime('%H:%M')} - Lịch tuần 7x48) -> Khóa máy trong 5s"
+            should_lock = True
+            self._in_grace_period = False
+            self._grace_period_start = None
+            self.grace_seconds_left = 0
+            if self.active_notification and self.active_notification.get("level") == "grace_period":
+                self.active_notification = None
+            if quota_exceeded:
+                lock_reason = f"Đã hết hạn mức ngày ({used_seconds}/{daily_limit_sec}s)"
             else:
-                # Trẻ đang sử dụng trên Desktop và vừa chạm mốc hết giờ:
-                # KÍCH HOẠT KHOẢNG ÂN HẠN 60 GIÂY ĐỂ LƯU BÀI!
-                if not self._in_grace_period:
-                    self._in_grace_period = True
-                    self._grace_period_start = now
-                    self.grace_seconds_left = 60
-                    res_type_name = "Hạn mức ngày" if quota_exceeded else "Khung giờ cho phép"
-                    self._emit_warning(
-                        milestone=0,
-                        remaining_seconds=0,
-                        restriction_type=res_type,
-                        title="⚠️ ChildGuard — ÂN HẠN 60 GIÂY ĐỂ LƯU BÀI",
-                        message=f"{res_type_name} đã hết! Bạn có 60 giây ân hạn để lưu bài và tài liệu. Máy sẽ khóa sau 60 giây.",
-                        level="grace_period",
-                    )
-                    should_lock = False  # CHƯA KHÓA MÁY để trẻ lưu bài
-                else:
-                    elapsed_grace = now - (self._grace_period_start or now)
-                    if elapsed_grace < 60.0:
-                        self.grace_seconds_left = max(0, int(60.0 - elapsed_grace))
-                        should_lock = False  # Tiếp tục cho trẻ lưu bài trong 60 giây
-                    else:
-                        # Đã hết 60 giây ân hạn -> Khóa máy!
-                        self._in_grace_period = False
-                        self.grace_seconds_left = 0
-                        should_lock = True
-                        res_type_name = "Hạn mức ngày" if quota_exceeded else "Khung giờ quy định"
-                        lock_reason = f"Hết thời gian ân hạn 60 giây để lưu bài ({res_type_name})"
+                day_names = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
+                now_dt = self._get_effective_local_datetime()
+                lock_reason = f"Ngoài khung giờ cho phép ({day_names[now_dt.weekday()]} lúc {now_dt.strftime('%H:%M')})"
         else:
             # Chưa hết giờ và đang trong khung giờ hợp lệ:
             self._in_grace_period = False
@@ -1036,10 +1012,10 @@ class PolicyEnforcer:
                 self.active_notification = None
 
         if should_lock:
-            needs_lock_action = False
-            if not is_already_locked:
-                needs_lock_action = True
-            else:
+            # Khóa do quota/lịch chỉ thực hiện một lần trong cùng một đợt hạn chế.
+            # Lệnh khóa thủ công của phụ huynh vẫn được duy trì cho đến khi mở khóa.
+            needs_lock_action = not is_already_locked
+            if self.manual_locked and is_already_locked:
                 time_since_last_lock = now - self._last_lock_time
                 workstation_unlocked = not workstation_locked
                 if not self.safe_lock_once and (workstation_unlocked or time_since_last_lock >= 5.0):
@@ -1048,8 +1024,8 @@ class PolicyEnforcer:
             if needs_lock_action:
                 self.lock_workstation(reason=lock_reason)
         else:
-            # Đang trong hạn mức hoặc đang trong ân hạn -> Nếu trước đó từng bị đánh dấu khóa thì giải phóng
-            if not self._in_grace_period and self.storage.get_lock_status():
+            # Đang trong hạn mức -> giải phóng trạng thái khóa của đợt hạn chế trước.
+            if self.storage.get_lock_status():
                 print("[Enforcer] 🔓 Đủ điều kiện sử dụng máy -> Giải phóng trạng thái khóa.")
                 self.storage.set_lock_status(False)
 

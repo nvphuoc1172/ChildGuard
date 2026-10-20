@@ -38,8 +38,9 @@ class IPCHandler(BaseHTTPRequestHandler):
             is_idle = getattr(self.enforcer, "is_idle", False) if self.enforcer else False
             idle_seconds = getattr(self.enforcer, "current_idle_seconds", 0.0) if self.enforcer else 0.0
             workstation_locked = getattr(self.enforcer, "is_locked_screen", False) if self.enforcer else False
-            in_grace_period = getattr(self.enforcer, "_in_grace_period", False) if self.enforcer else False
-            grace_seconds_left = getattr(self.enforcer, "grace_seconds_left", 0) if self.enforcer else 0
+            # Giữ hai trường tương thích cho Tray UI cũ; tính năng ân hạn đã bị loại bỏ.
+            in_grace_period = False
+            grace_seconds_left = 0
             active_notification = getattr(self.enforcer, "active_notification", None) if self.enforcer else None
             effective_rem_sec = getattr(self.enforcer, "effective_remaining_seconds", 0) if self.enforcer else 0
             effective_res_type = getattr(self.enforcer, "effective_restriction_type", "none") if self.enforcer else "none"

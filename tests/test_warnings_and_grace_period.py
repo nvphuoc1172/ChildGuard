@@ -1,11 +1,11 @@
-"""Unit test cho chức năng Cảnh báo trước 10, 5, 1 phút và Khoảng ân hạn 60 giây để trẻ lưu bài.
+"""Unit test cho cảnh báo trước 10, 5, 1 phút và khóa an toàn một lần.
 
 Kiểm tra:
 1. Cảnh báo trước 10, 5 và 1 phút theo hạn mức ngày (Quota).
 2. Cảnh báo trước 10, 5 và 1 phút theo Lịch tuần ma trận 7x48 và start_time/end_time.
-3. Kích hoạt khoảng ân hạn 60 giây khi hết giờ, không khóa máy trong 60s để trẻ lưu bài.
-4. Khóa máy tính sau khi hết 60 giây ân hạn.
-5. Hủy bỏ khoảng ân hạn và mở lại khi phụ huynh cấp thêm giờ (grant_extra_minutes).
+3. Không còn phát popup ân hạn 60 giây.
+4. Mỗi đợt hết quota/ngoài lịch chỉ gọi khóa máy một lần.
+5. Cấp thêm giờ giải phóng trạng thái khóa.
 6. Hiển thị thông tin qua IPC status và lịch sử thông báo.
 """
 from __future__ import annotations
@@ -84,8 +84,8 @@ def test_advance_warnings_by_quota_at_10_5_1_minutes(temp_storage):
     assert notifications[-1]["level"] == "urgent"
 
 
-def test_grace_period_60_seconds_and_lock_after_expiry(temp_storage):
-    """Kiểm tra khoảng ân hạn 60 giây khi hết hạn mức và khóa máy sau khi hết ân hạn."""
+def test_expiry_locks_once_without_grace_popup(temp_storage):
+    """Hết hạn mức khóa một lần, không phát popup và không lặp khóa."""
     notifications = []
     lock_calls = []
 
@@ -100,35 +100,21 @@ def test_grace_period_60_seconds_and_lock_after_expiry(temp_storage):
     # Đã dùng hết 7200s / 7200s
     temp_storage.add_screen_time(7200)
 
-    # Tick 1: Chạm mốc hết giờ -> Phải kích hoạt Ân hạn 60 giây, CHƯA ĐƯỢC KHÓA MÁY!
-    enforcer.tick(1.0)
-    assert enforcer._in_grace_period is True
-    assert enforcer.grace_seconds_left == 60
-    assert len(lock_calls) == 0, "Không được khóa máy ngay, phải cho trẻ 60 giây ân hạn để lưu bài!"
-
-    # Thông báo ân hạn được phát ra
-    grace_notifs = [n for n in notifications if n.get("level") == "grace_period"]
-    assert len(grace_notifs) == 1
-    assert "ÂN HẠN 60 GIÂY" in grace_notifs[0]["title"]
-    assert "60 giây ân hạn để lưu bài" in grace_notifs[0]["message"]
-
-    # Giả lập trôi qua 30 giây trong khoảng ân hạn: Vẫn chưa khóa máy
-    enforcer._grace_period_start -= 30.0
-    enforcer.tick(1.0)
-    assert enforcer._in_grace_period is True
-    assert 20 <= enforcer.grace_seconds_left <= 30
-    assert len(lock_calls) == 0, "Sau 30 giây ân hạn vẫn chưa được khóa máy"
-
-    # Giả lập trôi qua 60 giây (hết thời gian ân hạn): Phải thực thi khóa máy!
-    enforcer._grace_period_start -= 31.0  # Tổng cộng > 60s
+    # Chạm mốc hết giờ: khóa ngay một lần, không tạo trạng thái ân hạn.
     enforcer.tick(1.0)
     assert enforcer._in_grace_period is False
+    assert enforcer.grace_seconds_left == 0
     assert len(lock_calls) == 1
-    assert "Hết thời gian ân hạn 60 giây" in lock_calls[0]
+    assert not [n for n in notifications if n.get("level") == "grace_period"]
+
+    # lock_workstation thật đánh dấu trạng thái này; mô phỏng để kiểm tra tick sau.
+    temp_storage.set_lock_status(True)
+    enforcer.tick(1.0)
+    assert len(lock_calls) == 1
 
 
-def test_advance_warnings_and_grace_by_weekly_schedule_matrix(temp_storage):
-    """Kiểm tra cảnh báo 10, 5, 1 phút và ân hạn 60s theo Ma trận Lịch tuần 7x48."""
+def test_advance_warnings_and_lock_by_weekly_schedule_matrix(temp_storage):
+    """Kiểm tra cảnh báo 10, 5, 1 phút và khóa theo Ma trận Lịch tuần 7x48."""
     # Giả lập thứ Hai (weekday = 0):
     # Slot 42 (21:00 - 21:30) cho phép (= 1), Slot 43 (21:30 - 22:00) bị khóa (= 0)
     matrix = [[1] * 48 for _ in range(7)]
@@ -148,6 +134,8 @@ def test_advance_warnings_and_grace_by_weekly_schedule_matrix(temp_storage):
         idle_getter=lambda: 5.0,
         notifier=lambda notif: notifications.append(notif),
     )
+    lock_calls = []
+    enforcer.lock_workstation = lambda reason="": lock_calls.append(reason)
 
     # 1. Lúc 21:19:00 (còn 11 phút = 660s): Không có cảnh báo
     dt_2119 = datetime(2026, 10, 12, 21, 19, 0)  # 2026-10-12 là Thứ Hai (weekday = 0)
@@ -177,16 +165,16 @@ def test_advance_warnings_and_grace_by_weekly_schedule_matrix(temp_storage):
     assert len(notifications) == 3
     assert notifications[-1]["milestone"] == 1
 
-    # 5. Lúc 21:30:00 (chạm mốc kết thúc khung giờ): Kích hoạt ân hạn 60 giây!
+    # 5. Lúc 21:30:00: khóa một lần, không kích hoạt ân hạn.
     dt_2130 = datetime(2026, 10, 12, 21, 30, 0)
     enforcer._get_effective_local_datetime = lambda: dt_2130
     enforcer.tick(1.0)
-    assert enforcer._in_grace_period is True
-    assert enforcer.grace_seconds_left == 60
+    assert enforcer._in_grace_period is False
+    assert len(lock_calls) == 1
 
 
-def test_advance_warnings_and_grace_by_schedule_fallback_times(temp_storage):
-    """Kiểm tra cảnh báo 10, 5, 1 phút và ân hạn 60s theo khung giờ start_time / end_time."""
+def test_advance_warnings_and_lock_by_schedule_fallback_times(temp_storage):
+    """Kiểm tra cảnh báo 10, 5, 1 phút và khóa theo start_time/end_time."""
     temp_storage.save_policy({
         "version": 3,
         "quota": {"daily_minutes": 500},
@@ -201,6 +189,8 @@ def test_advance_warnings_and_grace_by_schedule_fallback_times(temp_storage):
         idle_getter=lambda: 5.0,
         notifier=lambda notif: notifications.append(notif),
     )
+    lock_calls = []
+    enforcer.lock_workstation = lambda reason="": lock_calls.append(reason)
 
     # 1. Lúc 21:20:00 (còn 10 phút đến 21:30)
     enforcer._get_effective_local_datetime = lambda: datetime(2026, 10, 12, 21, 20, 0)
@@ -220,24 +210,25 @@ def test_advance_warnings_and_grace_by_schedule_fallback_times(temp_storage):
     assert len(notifications) == 3
     assert notifications[-1]["milestone"] == 1
 
-    # 4. Lúc 21:30:00 (hết khung giờ) -> Ân hạn 60 giây
+    # 4. Lúc 21:30:00 (hết khung giờ) -> khóa một lần, không ân hạn.
     enforcer._get_effective_local_datetime = lambda: datetime(2026, 10, 12, 21, 30, 0)
     enforcer.tick(1.0)
-    assert enforcer._in_grace_period is True
-    assert enforcer.grace_seconds_left == 60
+    assert enforcer._in_grace_period is False
+    assert len(lock_calls) == 1
 
 
-def test_grant_minutes_cancels_grace_period(temp_storage):
-    """Kiểm tra khi đang trong ân hạn 60s, phụ huynh cộng thêm giờ thì tự động giải phóng ân hạn."""
+def test_grant_minutes_clears_policy_lock(temp_storage):
+    """Phụ huynh cộng thêm giờ thì giải phóng trạng thái khóa do quota."""
     enforcer = PolicyEnforcer(
         storage=temp_storage,
         lock_checker=lambda: False,
         idle_getter=lambda: 5.0,
     )
+    enforcer.lock_workstation = lambda reason="": temp_storage.set_lock_status(True)
     # Hết hạn mức
     temp_storage.add_screen_time(7200)
     enforcer.tick(1.0)
-    assert enforcer._in_grace_period is True
+    assert temp_storage.get_lock_status() is True
 
     # Phụ huynh cấp thêm 15 phút
     enforcer.grant_extra_minutes(15)
@@ -251,7 +242,7 @@ def test_grant_minutes_cancels_grace_period(temp_storage):
 
 
 def test_ipc_status_and_notifications_endpoints(temp_storage):
-    """Kiểm tra IPC Server cung cấp đầy đủ thông tin cảnh báo, ân hạn và lịch sử thông báo."""
+    """Kiểm tra IPC Server cung cấp thông tin cảnh báo và lịch sử thông báo."""
     import json
     from http.server import HTTPServer
     from ipc import IPCHandler

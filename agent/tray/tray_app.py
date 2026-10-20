@@ -394,19 +394,11 @@ class TrayApp:
                 rem = st.get("remaining_minutes", max(0, quota - used))
                 is_locked = st.get("is_locked", False)
                 is_idle = st.get("is_idle", False)
-                in_grace = st.get("in_grace_period", False)
-                grace_sec = st.get("grace_seconds_left", 0)
-
                 used_num_var.set(f"{used}p")
                 quota_num_var.set(f"Hạn mức: {quota}p")
                 rem_num_var.set(f"{rem}p")
 
-                if in_grace:
-                    status_tag_var.set(f"⚠️ Ân hạn {grace_sec}s")
-                    rem_lbl.configure(fg="#ef4444")
-                    badge_var.set("⏰ Sắp hết giờ ân hạn!")
-                    msg_var.set(f"Em còn {grace_sec} giây để lưu bài tập trước khi máy tính khóa nhé! 💾")
-                elif is_locked or rem <= 0:
+                if is_locked or rem <= 0:
                     status_tag_var.set("🔒 Đã khóa")
                     rem_lbl.configure(fg="#ef4444")
                     badge_var.set("🏆 Bé xuất sắc hoàn thành mục tiêu ngày!")
@@ -719,7 +711,7 @@ class TrayApp:
                 root.overrideredirect(True)
                 root.attributes("-topmost", True)
                 level = notif.get("level", "info")
-                if level in ("grace_period", "app_blocked", "dns_blocked"):
+                if level in ("app_blocked", "dns_blocked"):
                     bg_color = "#b91c1c"
                 elif level == "urgent":
                     bg_color = "#ea580c"
@@ -743,7 +735,7 @@ class TrayApp:
                 msg_lbl = tk.Label(frame, text=notif.get("message", ""), font=("Segoe UI", 10), fg="#f1f5f9", bg=bg_color, wraplength=380, justify="left")
                 msg_lbl.pack(anchor="w", pady=4)
 
-                btn_text = "Đã hiểu / Lưu bài" if level in ("grace_period", "urgent") else "Đã hiểu"
+                btn_text = "Đã hiểu / Lưu bài" if level == "urgent" else "Đã hiểu"
                 btn_close = tk.Button(frame, text=btn_text, font=("Segoe UI", 9, "bold"), bg="#0f172a", fg="white", padx=10, pady=2, relief="flat", command=root.destroy)
                 btn_close.pack(anchor="e")
 
@@ -773,11 +765,6 @@ class TrayApp:
             used = st.get("used_minutes", 0)
             is_locked = st.get("is_locked", False)
             is_idle = st.get("is_idle", False)
-            in_grace = st.get("in_grace_period", False)
-            grace_left = st.get("grace_seconds_left", 0)
-
-            if in_grace:
-                return f"⚠️ Ân hạn lưu bài: Còn {grace_left} giây!"
             if is_locked or rem <= 0:
                 return f"🔒 Đã khóa (Còn lại: 0/{quota} phút)"
             if is_idle:
@@ -808,12 +795,7 @@ class TrayApp:
                         quota = st.get("daily_quota", 0)
                         is_locked = st.get("is_locked", False)
                         is_idle = st.get("is_idle", False)
-                        in_grace = st.get("in_grace_period", False)
-                        grace_left = st.get("grace_seconds_left", 0)
-
-                        if in_grace:
-                            status_str = f"Ân hạn {grace_left}s"
-                        elif is_locked or rem <= 0:
+                        if is_locked or rem <= 0:
                             status_str = "Đã khóa"
                         elif is_idle:
                             status_str = "Tạm dừng"
