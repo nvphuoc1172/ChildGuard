@@ -46,7 +46,7 @@ Giới hạn bảo mật của Windows: một người đã có quyền Administ
 Không cài Service khi đang thử logic khóa trên máy phát triển. Chạy:
 
 ```powershell
-python agent\run_agent.py --ca-cert agent\certs\ogk-ca.crt --dev-safe-lock --pair
+python agent/run_agent.py --ca-cert certs/ogk-ca.crt --pair
 ```
 
 Chế độ này chỉ gọi khóa Windows một lần cho mỗi đợt vi phạm. Nút **Mở khóa máy** trên Dashboard xóa trạng thái khóa của Agent.
@@ -65,7 +65,7 @@ Có hai cách vận hành Agent:
 Nếu chỉ chạy:
 
 ```powershell
-python agent\run_agent.py --ca-cert agent\certs\ogk-ca.crt
+python agent\run_agent.py
 ```
 
 thì sau khi shutdown và bật máy lại, người phát triển phải chạy lại lệnh trên. Không cần tạo mã ghép đôi mới: `agent\agent_state\device_token.json` giữ định danh thiết bị và refresh token để Agent tự xin access token mới.
@@ -73,7 +73,7 @@ thì sau khi shutdown và bật máy lại, người phát triển phải chạy
 Chỉ chạy `--pair` khi muốn chuyển máy sang trẻ khác, thay phiên ghép đôi, token/thiết bị đã bị phụ huynh thu hồi, database server bị tạo lại hoặc file trạng thái bị mất/hỏng:
 
 ```powershell
-python agent\run_agent.py --ca-cert agent\certs\ogk-ca.crt --pair
+python agent/run_agent.py --ca-cert certs/ogk-ca.crt --pair
 ```
 Khi muốn dừng lại thì nhấn Crtl+C (chứ không tắt bằng nút X)
 Ctrl+C

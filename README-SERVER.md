@@ -447,6 +447,14 @@ Nếu TCP thành công nhưng TLS báo `IP address mismatch`, SAN không chứa 
 
 ## 13. Dashboard và tài khoản
 
+Chạy server:
+```bash
+source /opt/childguard/.venv/bin/activate
+cd /opt/childguard/app/server
+uvicorn app.main:app --host 0.0.0.0 --port 8443 \
+  --ssl-keyfile /opt/childguard/certs/ogk.key \
+  --ssl-certfile /opt/childguard/certs/ogk.crt
+```
 Mở:
 
 ```text
